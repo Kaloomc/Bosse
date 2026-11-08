@@ -1,0 +1,628 @@
+// --- Outils ------------------------------------------------------------------
+const $ = (sel) => document.querySelector(sel);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+const ico = (nom) => `<svg class="ico" aria-hidden="true"><use href="#i-${nom}"/></svg>`;
+
+async function api(url, options = {}) {
+  const res = await fetch(url, {
+    ...options,
+    headers: { 'Content-Type': 'application/json' },
+    body: options.body && JSON.stringify(options.body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && !url.endsWith('/connexion')) location.hash = '#connexion';
+  if (!res.ok) throw new Error(data.erreur || 'Erreur serveur');
+  return data;
+}
+
+// Petit message en bas de l'écran, avec un bouton facultatif (ex. « Annuler »).
+let minuteurToast;
+function toast(texte, action) {
+  const el = $('#toast');
+  el.textContent = texte;
+  if (action) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = action.libelle;
+    b.addEventListener('click', () => { el.classList.remove('visible'); action.faire(); });
+    el.append(b);
+  }
+  el.classList.add('visible');
+  clearTimeout(minuteurToast);
+  minuteurToast = setTimeout(() => el.classList.remove('visible'), action ? 7000 : 3500);
+}
+
+// 95 min → "1 h 35" ; 30 → "30 min"
+function duree(min) {
+  const m = Math.max(0, Math.round(min || 0));
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  return m % 60 ? `${h} h ${String(m % 60).padStart(2, '0')}` : `${h} h`;
+}
+
+// "2026-11-13" → "ven. 13 nov." (avec « demain », « dans 3 j »… pour les échéances proches)
+function echeance(iso) {
+  const jours = Math.round((Date.parse(iso.slice(0, 10) + 'T12:00:00') - Date.now()) / 864e5);
+  const date = new Date(iso.slice(0, 10) + 'T12:00:00').toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
+  if (jours < 0) return { texte: `En retard · ${date}`, classe: 'retard' };
+  if (jours <= 1) return { texte: jours === 0 ? 'Aujourd’hui' : 'Demain', classe: 'proche' };
+  if (jours <= 7) return { texte: `${date} · dans ${jours} j`, classe: 'proche' };
+  return { texte: date, classe: '' };
+}
+const puceEcheance = (iso) => {
+  if (!iso) return '';
+  const e = echeance(iso);
+  return `<span class="puce ${e.classe}">${ico('calendar')}${esc(e.texte)}</span>`;
+};
+
+// Logo du projet (ou initiale sur sa couleur si le logo manque).
+function pastille(p, taille = '') {
+  const initiale = esc((p?.icone || p?.nom || '•').trim().slice(0, 2).toUpperCase());
+  if (!p) return `<span class="pastille ${taille}" style="--c:var(--accent)">•</span>`;
+  const logo = p.logo ? `<img src="/api/logo/${esc(p.id)}" alt="" loading="lazy" onerror="this.remove()">` : '';
+  return `<span class="pastille ${taille}" style="--c:${esc(p.hex)}"><b>${initiale}</b>${logo}</span>`;
+}
+
+const barre = (valeur, max) => {
+  const pc = max > 0 ? Math.min(100, (valeur / max) * 100) : 0;
+  return `<div class="barre" role="progressbar" aria-valuemin="0" aria-valuemax="${Math.round(max)}" aria-valuenow="${Math.round(valeur)}"><div style="width:${pc}%"></div></div>`;
+};
+
+// « Cette semaine » : une ligne par projet avec sa barre vers l'objectif hebdo (ou juste le temps, sans objectif).
+const carteSemaine = (liste) => (liste?.length ? `
+  <section class="carte semaine">
+    <h3>Cette semaine</h3>
+    ${liste.slice(0, 5).map((p) => `
+      <div class="semaine-ligne" style="--c:${esc(p.hex)}">
+        ${pastille(p, 'petite')}
+        <div class="semaine-corps">
+          <div class="semaine-tete"><span class="semaine-nom">${esc(p.nom)}</span><span class="semaine-temps">${duree(p.minutes)}${p.objectif ? ` / ${duree(p.objectif)}` : ''}</span></div>
+          ${p.objectif ? barre(p.minutes, p.objectif) : ''}
+        </div>
+      </div>`).join('')}
+  </section>` : '');
+
+const ligneTotaux = (t) => `Aujourd’hui ${duree(t.jour)} · Cette semaine ${duree(t.semaine)}`;
+
+// --- Choix refusés avec « Autre chose » (gardés jusqu'à minuit) ------------------------------
+const jourLocal = () => new Date().toLocaleDateString('sv-SE');
+function exclus() {
+  try {
+    const e = JSON.parse(localStorage.getItem('bosse-exclus') || '{}');
+    return e.jour === jourLocal() ? e.ids : [];
+  } catch {
+    return [];
+  }
+}
+function memoriserExclus(ids) {
+  try {
+    localStorage.setItem('bosse-exclus', JSON.stringify({ jour: jourLocal(), ids }));
+  } catch {}
+}
+
+// --- Son et écran allumé pendant le chrono -------------------------------------------------------
+// Le son n'est autorisé par le navigateur qu'après un appui : on le prépare quand tu lances le chrono.
+let audio = null;
+function preparerSon() {
+  try {
+    audio ??= new (window.AudioContext || window.webkitAudioContext)();
+    audio.resume();
+  } catch {}
+}
+function sonnerFin() {
+  try { navigator.vibrate?.([300, 150, 300, 150, 600]); } catch {}
+  try {
+    if (!audio) return;
+    [0, 0.35, 0.7].forEach((retard) => {
+      const o = audio.createOscillator();
+      const g = audio.createGain();
+      o.frequency.value = 880;
+      g.gain.setValueAtTime(0.0001, audio.currentTime + retard);
+      g.gain.exponentialRampToValueAtTime(0.35, audio.currentTime + retard + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + retard + 0.28);
+      o.connect(g).connect(audio.destination);
+      o.start(audio.currentTime + retard);
+      o.stop(audio.currentTime + retard + 0.3);
+    });
+  } catch {}
+}
+let veille = null;
+async function garderEcranAllume() {
+  try { veille = await navigator.wakeLock?.request('screen'); } catch {}
+}
+function relacherEcran() {
+  try { veille?.release(); } catch {}
+  veille = null;
+}
+
+// --- Radio (musique pendant le chrono) ------------------------------------------------------------------
+const musiqueActive = () => {
+  try { return localStorage.getItem('bosse-musique') !== 'non'; } catch { return true; }
+};
+function majMusique(e) {
+  $('#musique-titre').textContent = e.titre || 'Musique';
+  $('#m-lecture').innerHTML = ico(e.joue ? 'pause' : 'play');
+  $('#m-son').innerHTML = ico(e.coupe ? 'mute' : 'volume');
+  $('#m-son').setAttribute('aria-label', e.coupe ? 'Remettre le son' : 'Couper le son');
+  const note = $('#musique-note');
+  note.textContent = e.erreur || (e.bloque ? 'Le navigateur bloque le démarrage automatique : touche ▶ pour lancer la musique.' : e.actif && !e.titre ? 'Chargement de la musique…' : '');
+  note.hidden = !note.textContent;
+}
+Radio.surChangement(majMusique);
+$('#m-lecture').addEventListener('click', () => (Radio.etat.joue ? Radio.pause() : Radio.etat.actif ? Radio.reprendre() : Radio.demarrer()));
+$('#m-suivante').addEventListener('click', () => Radio.suivante());
+$('#m-son').addEventListener('click', () => Radio.basculerSon());
+
+// --- Lancer un chrono (depuis « Maintenant » ou une tâche) ------------------------------------------
+async function lancerChrono(id, origine) {
+  preparerSon();
+  try {
+    await api('/api/chrono/demarrer', { method: 'POST', body: { id, origine } });
+    location.hash = '#chrono';
+  } catch (err) {
+    toast(err.message);
+    if (/déjà lancé/.test(err.message)) location.hash = '#chrono';
+  }
+}
+
+// --- Écran « Maintenant » ----------------------------------------------------------------------
+// La carte d'une action : projet (logo, couleur), titre, raison du choix, prochaine étape, durée, échéance, priorité.
+function carteAction(a) {
+  const projet = a.projet;
+  const etape = a.type === 'tache' && projet?.prochaineEtape ? `<p class="etape"><b>Prochaine étape du projet</b>${esc(projet.prochaineEtape)}</p>` : '';
+  return `
+    <article class="action" style="--c:${esc(projet ? projet.hex : '#8b93ff')}">
+      <header class="action-tete">
+        ${pastille(projet, 'grande')}
+        <div><span class="projet-nom">${esc(projet ? projet.nom : 'Hors projet')}</span>
+        ${projet?.categorie ? `<span class="categorie">${esc(projet.categorie)}</span>` : ''}</div>
+      </header>
+      <h1 class="action-titre">${esc(a.titre)}</h1>
+      ${a.raison ? `<p class="raison">${esc(a.raison)}</p>` : ''}
+      ${etape}
+      <div class="action-pied">
+        <span class="puce">${ico('timer')}${duree(a.duree)}</span>
+        ${puceEcheance(a.echeance)}
+        ${a.priorite ? `<span class="puce prio-${esc(a.priorite)}">Priorité ${esc(a.priorite.toLowerCase())}</span>` : ''}
+      </div>
+    </article>`;
+}
+
+async function chargerMaintenant() {
+  const zone = $('#maintenant-contenu');
+  const refus = exclus();
+  const d = await api('/api/maintenant' + (refus.length ? `?exclus=${encodeURIComponent(refus.join(','))}` : ''));
+  const a = d.action;
+  if (!a) {
+    zone.innerHTML = `<div class="vide"><h1>Rien à faire</h1><p>Aucune tâche ni projet en cours. Ajoute une tâche (onglet Tâches), puis reviens ici.</p></div>`;
+    return;
+  }
+  zone.innerHTML = `
+    <p class="sur-titre">L’action du moment</p>
+    ${carteAction(a)}
+    <button class="btn-principal" type="button" id="lancer">${ico('timer')}Lancer le chrono · ${duree(a.duree)}</button>
+    <button class="btn-lien" type="button" id="autre">${ico('skip')}Autre chose</button>
+    ${d.toutVu ? '<p class="note">Tu as fait le tour des choix : retour au premier.</p>' : ''}
+    <p class="note">${esc(ligneTotaux(d.totaux))}</p>
+    ${carteSemaine(d.projetsSemaine)}
+    <p class="note discret">${d.total} choix possible${d.total > 1 ? 's' : ''} · score ${a.score}/100</p>`;
+  $('#lancer').addEventListener('click', () => lancerChrono(a.id));
+  $('#autre').addEventListener('click', () => {
+    memoriserExclus(d.toutVu ? [] : [...new Set([...refus, a.id])]);
+    chargerMaintenant().catch((e) => toast(e.message));
+  });
+}
+
+// --- Écran « Chrono » (compte à rebours) -------------------------------------------------------------
+let tic = null; // minuteur d'affichage
+const RAYON = 90;
+const CIRCONFERENCE = 2 * Math.PI * RAYON;
+const mmss = (ms) => {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return `${h ? `${h}:${String(m).padStart(2, '0')}` : m}:${String(s % 60).padStart(2, '0')}`;
+};
+
+function arreterChrono() {
+  clearInterval(tic);
+  tic = null;
+  relacherEcran();
+  document.title = 'BOSSE !';
+}
+
+async function chargerChrono() {
+  const { chrono: c0 } = await api('/api/chrono');
+  if (!c0) return void (location.hash = '#maintenant');
+  if (c0.etat === 'fini') return void (location.hash = '#bilan');
+  let c = c0;
+  let t0 = performance.now();
+  let sonne = false;
+  const projet = c.candidat.projet;
+  $('#chrono-contenu').innerHTML = `
+    <article class="chrono" style="--c:${esc(projet ? projet.hex : '#8b93ff')}">
+      <header class="action-tete">${pastille(projet)}<span class="projet-nom">${esc(projet ? projet.nom : 'Hors projet')}</span></header>
+      <h1 class="chrono-titre">${esc(c.candidat.titre)}</h1>
+      <div class="anneau">
+        <svg viewBox="0 0 200 200" aria-hidden="true">
+          <circle class="anneau-fond" cx="100" cy="100" r="${RAYON}"/>
+          <circle class="anneau-progres" id="progres" cx="100" cy="100" r="${RAYON}" stroke-dasharray="${CIRCONFERENCE}" stroke-dashoffset="${CIRCONFERENCE}" transform="rotate(-90 100 100)"/>
+        </svg>
+        <div class="anneau-centre"><div class="temps" id="temps" role="timer"></div><div class="sous-temps" id="sous-temps"></div></div>
+      </div>
+      <div class="chrono-actions">
+        <button class="btn-lien" type="button" id="btn-pause"></button>
+        <button class="btn-lien" type="button" id="btn-plus">${ico('plus')}10 min</button>
+      </div>
+      <button class="btn-principal" type="button" id="btn-terminer">${ico('check')}Terminer</button>
+      <button class="btn-lien discret" type="button" id="btn-annuler">Annuler cette séance</button>
+    </article>`;
+
+  const maj = (nouveau) => { c = nouveau; t0 = performance.now(); sonne = sonne && c.dureePrevueMs - c.ecouleMs <= 0; };
+  function dessiner() {
+    const ecoule = c.ecouleMs + (c.etat === 'en cours' ? performance.now() - t0 : 0);
+    const reste = c.dureePrevueMs - ecoule;
+    $('#temps').textContent = reste > 0 ? mmss(reste) : `+${mmss(-reste)}`;
+    $('#sous-temps').textContent = c.etat === 'pause' ? 'En pause' : reste > 0 ? 'restant' : 'temps écoulé';
+    $('#temps').classList.toggle('depasse', reste <= 0);
+    $('#progres').classList.toggle('en-pause', c.etat === 'pause');
+    $('#progres').style.strokeDashoffset = CIRCONFERENCE * (1 - Math.min(1, ecoule / c.dureePrevueMs));
+    $('#btn-pause').innerHTML = c.etat === 'pause' ? `${ico('play')}Reprendre` : `${ico('pause')}Pause`;
+    document.title = `${reste > 0 ? mmss(reste) : '⏰'} · BOSSE !`;
+    if (reste <= 0 && c.etat === 'en cours' && !sonne) {
+      sonne = true;
+      sonnerFin();
+      toast('Temps écoulé ! Termine, ou ajoute 10 min.');
+    }
+  }
+  const action = (chemin, corps) => api(chemin, { method: 'POST', body: corps }).then((r) => { maj(r.chrono); dessiner(); }).catch((e) => toast(e.message));
+  $('#btn-pause').addEventListener('click', () => {
+    const reprise = c.etat === 'pause';
+    reprise ? Radio.reprendre() : Radio.pause();
+    action(reprise ? '/api/chrono/reprendre' : '/api/chrono/pause');
+  });
+  $('#btn-plus').addEventListener('click', () => action('/api/chrono/ajouter', { minutes: 10 }));
+  $('#btn-terminer').addEventListener('click', async () => {
+    try {
+      await api('/api/chrono/terminer', { method: 'POST' });
+      Radio.arreter();
+      location.hash = '#bilan';
+    } catch (e) { toast(e.message); }
+  });
+  $('#btn-annuler').addEventListener('click', async () => {
+    if (!confirm('Annuler cette séance ? Le temps ne sera pas enregistré.')) return;
+    try {
+      await api('/api/chrono', { method: 'DELETE' });
+      Radio.arreter();
+      location.hash = '#maintenant';
+    } catch (e) { toast(e.message); }
+  });
+  dessiner();
+  clearInterval(tic);
+  tic = setInterval(dessiner, 250);
+  garderEcranAllume();
+  // La musique démarre avec le chrono (et reste en place si l'écran est redessiné).
+  $('#musique').hidden = !musiqueActive();
+  if (musiqueActive()) {
+    majMusique(Radio.etat);
+    if (!Radio.etat.actif) Radio.demarrer();
+  }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    if (location.hash === '#chrono') { chargerChrono().catch(() => {}); } // le temps a passé : on relit l'état du serveur
+  }
+});
+
+// --- Écran « Bilan » -------------------------------------------------------------------------------------
+async function chargerBilan() {
+  const { chrono: c } = await api('/api/chrono');
+  if (!c) return void (location.hash = '#maintenant');
+  if (c.etat !== 'fini') return void (location.hash = '#chrono');
+  const cand = c.candidat;
+  const projet = cand.projet;
+  const caseTermine = cand.type === 'projet' ? 'Projet terminé' : 'Tâche terminée';
+  $('#bilan-contenu').innerHTML = `
+    <form id="form-bilan" class="carte bilan" style="--c:${esc(projet ? projet.hex : '#8b93ff')}">
+      <header class="action-tete">${pastille(projet)}<div><span class="projet-nom">${esc(projet ? projet.nom : 'Hors projet')}</span><span class="categorie">${esc(cand.titre)}</span></div></header>
+      <h2>Bilan de la séance</h2>
+      <label for="b-duree">Temps travaillé (minutes)</label>
+      <div class="pas">
+        <button type="button" class="btn-lien" id="b-moins" aria-label="5 minutes de moins">−5</button>
+        <input id="b-duree" type="number" inputmode="numeric" min="1" max="600" value="${c.minutes}" required>
+        <button type="button" class="btn-lien" id="b-plus" aria-label="5 minutes de plus">+5</button>
+      </div>
+      <p class="aide" id="b-aide" hidden>Ça fait beaucoup : le chrono a peut-être tourné trop longtemps. Corrige la durée si besoin.</p>
+      <label for="b-bilan">Où j’en suis</label>
+      <textarea id="b-bilan" rows="3" maxlength="2000" placeholder="Ce qui est fait, ce qui bloque…"></textarea>
+      ${projet ? `<label for="b-etape">Prochaine étape</label><input id="b-etape" type="text" maxlength="500" value="${esc(projet.prochaineEtape || '')}" placeholder="Par quoi continuer ?">` : ''}
+      <label class="case"><input id="b-termine" type="checkbox"> ${caseTermine}</label>
+      <button class="btn-principal" type="submit">${ico('check')}Enregistrer</button>
+      <p class="message" role="alert"></p>
+    </form>`;
+  const champ = $('#b-duree');
+  const aide = () => { $('#b-aide').hidden = !(Number(champ.value) > 180); };
+  aide();
+  champ.addEventListener('input', aide);
+  $('#b-moins').addEventListener('click', () => { champ.value = Math.max(1, Number(champ.value || 0) - 5); aide(); });
+  $('#b-plus').addEventListener('click', () => { champ.value = Math.min(600, Number(champ.value || 0) + 5); aide(); });
+  $('#form-bilan').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const bouton = ev.submitter;
+    bouton.disabled = true;
+    try {
+      const r = await api('/api/bilan', { method: 'POST', body: {
+        duree: Number(champ.value), bilan: $('#b-bilan').value, prochaineEtape: $('#b-etape')?.value ?? '', termine: $('#b-termine').checked,
+      } });
+      memoriserExclus([]);
+      $('#bilan-contenu').innerHTML = `
+        <div class="termine ${r.message.objectifAtteint ? 'reussi' : ''}">
+          <p class="sur-titre">Séance enregistrée</p>
+          <p class="grand">${duree(r.duree)}</p>
+          <h2 class="bravo">${esc(r.message.titre)}</h2>
+          ${r.message.lignes.map((l) => `<p class="ligne-bravo">${esc(l)}</p>`).join('')}
+          ${carteSemaine(r.projetsSemaine)}
+          ${r.enAttente ? '<p class="note">Notion est injoignable : la séance est gardée sur le serveur et sera envoyée plus tard.</p>' : ''}
+          <button class="btn-principal" type="button" id="suite">${ico('zap')}Action suivante</button>
+        </div>`;
+      $('#suite').addEventListener('click', () => { location.hash = '#maintenant'; });
+    } catch (err) {
+      $('#form-bilan .message').textContent = err.message;
+      bouton.disabled = false;
+    }
+  });
+}
+
+// --- Écran « Projets » ---------------------------------------------------------------------------------
+async function chargerProjets() {
+  const liste = await api('/api/projets');
+  $('#projets-contenu').innerHTML = liste.length ? liste.map((p) => `
+    <article class="carte projet" style="--c:${esc(p.hex)}">
+      <header class="projet-tete">
+        ${pastille(p)}
+        <div class="projet-titre"><h3>${esc(p.nom)}</h3>${p.categorie ? `<span class="categorie">${esc(p.categorie)}</span>` : ''}</div>
+        ${p.url ? `<a class="lien-notion" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer" aria-label="Ouvrir ${esc(p.nom)} dans Notion">${ico('link')}</a>` : ''}
+      </header>
+      ${p.prochaineEtape ? `<p class="etape-courte"><b>Prochaine étape</b> ${esc(p.prochaineEtape)}</p>` : ''}
+      ${p.objectifHebdo ? `<div class="objectif">${barre(p.tempsSemaine, p.objectifHebdo)}<span class="objectif-texte">${duree(p.tempsSemaine)} sur ${duree(p.objectifHebdo)} cette semaine${p.tempsSemaine >= p.objectifHebdo ? ' · atteint' : ` · il reste ${duree(p.objectifHebdo - p.tempsSemaine)}`}</span></div>` : ''}
+      <div class="puces">
+        <span class="puce">${p.tachesOuvertes} tâche${p.tachesOuvertes > 1 ? 's' : ''} à faire</span>
+        ${p.tempsCumule ? `<span class="puce">${ico('timer')}${duree(p.tempsCumule)} au total</span>` : ''}
+        ${puceEcheance(p.echeance)}
+        ${p.priorite ? `<span class="puce prio-${esc(p.priorite)}">Priorité ${esc(p.priorite.toLowerCase())}</span>` : ''}
+      </div>
+    </article>`).join('') : '<div class="vide"><p>Aucun projet « En cours » dans Notion.</p></div>';
+}
+
+// --- Écran « Tâches » ------------------------------------------------------------------------------------------
+async function chargerTaches() {
+  const liste = await api('/api/taches');
+  const groupes = new Map(); // clé → { projet, taches }
+  for (const t of liste) {
+    const cle = t.projet ? t.projet.id : 'aucun';
+    if (!groupes.has(cle)) groupes.set(cle, { projet: t.projet, taches: [] });
+    groupes.get(cle).taches.push(t);
+  }
+  const ordre = [...groupes.values()].sort((a, b) => (a.projet ? 1 : 0) - (b.projet ? 1 : 0) || (a.projet?.nom || '').localeCompare(b.projet?.nom || '', 'fr'));
+  $('#taches-contenu').innerHTML = ordre.length ? ordre.map((g) => `
+    <section class="groupe" style="--c:${esc(g.projet ? g.projet.hex : '#8b93ff')}">
+      <h3 class="groupe-titre">${pastille(g.projet, 'petite')}${esc(g.projet ? g.projet.nom : 'Hors projet')}<span class="compte">${g.taches.length}</span></h3>
+      <ul class="liste">${g.taches.map((t) => `
+        <li class="ligne ${t.projetActif ? '' : 'en-sommeil'}">
+          <button class="rond" type="button" data-fait="${esc(t.id)}" aria-label="Terminer : ${esc(t.titre)}">${ico('check')}</button>
+          <div class="ligne-texte"><span class="ligne-titre">${esc(t.titre)}</span>
+            <span class="puces"><span class="puce">${duree(t.duree)}</span>${puceEcheance(t.echeance)}${t.priorite ? `<span class="puce prio-${esc(t.priorite)}">${esc(t.priorite)}</span>` : ''}${t.projetActif ? '' : '<span class="puce">projet en pause</span>'}</span></div>
+          ${t.projetActif ? `<button class="lancer" type="button" data-lancer="${esc(t.id)}" aria-label="Lancer le chrono : ${esc(t.titre)}">${ico('play')}</button>` : ''}
+          ${t.url ? `<a class="lien-notion" href="${esc(t.url)}" target="_blank" rel="noopener noreferrer" aria-label="Ouvrir dans Notion">${ico('link')}</a>` : ''}
+        </li>`).join('')}</ul>
+    </section>`).join('') : '<div class="vide"><p>Aucune tâche à faire. Ajoute-en avec le bouton « Ajouter ».</p></div>';
+}
+
+$('#taches-contenu').addEventListener('click', async (ev) => {
+  const fait = ev.target.closest('[data-fait]');
+  const lancer = ev.target.closest('[data-lancer]');
+  if (lancer) return lancerChrono(lancer.dataset.lancer);
+  if (!fait) return;
+  const id = fait.dataset.fait;
+  fait.disabled = true;
+  try {
+    await api(`/api/taches/${encodeURIComponent(id)}`, { method: 'PATCH', body: { fait: true } });
+    toast('Tâche terminée', { libelle: 'Annuler', faire: async () => {
+      try {
+        await api(`/api/taches/${encodeURIComponent(id)}`, { method: 'PATCH', body: { fait: false } });
+        chargerTaches();
+      } catch (e) { toast(e.message); }
+    } });
+    chargerTaches();
+  } catch (e) {
+    toast(e.message);
+    fait.disabled = false;
+  }
+});
+
+$('#ajouter-tache').addEventListener('click', async () => {
+  const form = $('#form-tache');
+  form.hidden = !form.hidden;
+  if (form.hidden) return;
+  try {
+    const projets = await api('/api/projets');
+    $('#t-projet').innerHTML = `<option value="">Hors projet (to-do simple)</option>${projets.map((p) => `<option value="${esc(p.id)}">${esc(p.nom)}</option>`).join('')}`;
+  } catch (e) { toast(e.message); }
+  $('#t-titre').focus();
+});
+
+$('#form-tache').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const msg = $('#form-tache .message');
+  msg.textContent = '';
+  const bouton = ev.submitter;
+  bouton.disabled = true;
+  try {
+    await api('/api/taches', { method: 'POST', body: {
+      titre: $('#t-titre').value, projetId: $('#t-projet').value || null, duree: Number($('#t-duree').value) || 30,
+      priorite: $('#t-priorite').value || null, echeance: $('#t-echeance').value || null,
+    } });
+    $('#form-tache').reset();
+    $('#form-tache').hidden = true;
+    toast('Tâche ajoutée');
+    await chargerTaches();
+  } catch (err) {
+    msg.textContent = err.message;
+  }
+  bouton.disabled = false;
+});
+
+// --- Écran « Roue » ------------------------------------------------------------------------------------------------
+// Une part par projet, large comme ses chances de sortir (un projet en retard sur son objectif a une plus grande part).
+// Le tirage est fait par le serveur ; ici on dessine la roue et on la fait tourner jusqu'à la part tirée.
+let rotationRoue = 0;
+const sinceRoue = (deg, r) => {
+  const rad = (deg * Math.PI) / 180;
+  return [100 + r * Math.sin(rad), 100 - r * Math.cos(rad)];
+};
+const secteurs = (parts) => {
+  let debut = 0;
+  return parts.map((p) => {
+    const angle = p.probabilite * 360;
+    const s = { p, debut, fin: debut + angle, centre: debut + angle / 2 };
+    debut += angle;
+    return s;
+  });
+};
+function dessinerRoue(parts) {
+  const formes = secteurs(parts).map((s) => {
+    const [x1, y1] = sinceRoue(s.debut, 96);
+    const [x2, y2] = sinceRoue(s.fin, 96);
+    const forme = s.fin - s.debut >= 359.9
+      ? `<circle cx="100" cy="100" r="96" fill="${esc(s.p.hex)}"/>`
+      : `<path d="M100 100 L${x1.toFixed(2)} ${y1.toFixed(2)} A96 96 0 ${s.fin - s.debut > 180 ? 1 : 0} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} Z" fill="${esc(s.p.hex)}"/>`;
+    const initiales = s.fin - s.debut >= 14 ? `<text class="roue-initiales" transform="rotate(${s.centre.toFixed(2)} 100 100)" x="100" y="34" text-anchor="middle">${esc((s.p.icone || s.p.nom).trim().slice(0, 2).toUpperCase())}</text>` : '';
+    return forme + initiales;
+  });
+  $('#roue-g').innerHTML = formes.join('') + '<circle cx="100" cy="100" r="13" class="roue-moyeu"/>';
+  $('#roue-legende').innerHTML = parts.map((p) => `
+    <li style="--c:${esc(p.hex)}"><span class="point"></span><span class="legende-nom">${esc(p.nom)}</span>
+      ${p.atteint ? '<span class="puce">objectif atteint</span>' : p.retard ? '<span class="puce proche">en retard</span>' : ''}
+      <span class="legende-pc">${Math.round(p.probabilite * 100)} %</span></li>`).join('');
+}
+
+async function chargerRoue() {
+  const { parts } = await api('/api/roue');
+  $('#roue-resultat').innerHTML = '';
+  if (!parts.length) {
+    $('#roue-contenu').hidden = true;
+    $('#roue-vide').hidden = false;
+    return;
+  }
+  $('#roue-contenu').hidden = false;
+  $('#roue-vide').hidden = true;
+  dessinerRoue(parts);
+}
+
+async function tournerRoue() {
+  const bouton = $('#tourner');
+  bouton.disabled = true;
+  $('#roue-resultat').innerHTML = '';
+  try {
+    const r = await api('/api/roue/tirer', { method: 'POST' });
+    dessinerRoue(r.parts);
+    const s = secteurs(r.parts)[r.index];
+    // La part tirée doit s'arrêter sous le repère (en haut) : on vise un point au hasard à l'intérieur de la part.
+    const decalage = (Math.random() - 0.5) * (s.fin - s.debut) * 0.7;
+    const cible = Math.ceil(rotationRoue / 360) * 360 + 5 * 360 + (360 - (s.centre + decalage));
+    const reduit = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const g = $('#roue-g');
+    g.style.transition = reduit ? 'none' : 'transform 4.6s cubic-bezier(.12,.6,.12,1)';
+    g.style.transform = `rotate(${cible}deg)`;
+    rotationRoue = cible;
+    await new Promise((fin) => setTimeout(fin, reduit ? 0 : 4800));
+    const a = r.action;
+    $('#roue-resultat').innerHTML = `
+      <p class="sur-titre">La roue a choisi</p>
+      ${carteAction(a)}
+      <button class="btn-principal" type="button" id="roue-lancer">${ico('timer')}Lancer le chrono · ${duree(a.duree)}</button>`;
+    $('#roue-lancer').addEventListener('click', () => lancerChrono(a.id, 'roue'));
+  } catch (err) {
+    toast(err.message);
+  }
+  bouton.disabled = false;
+}
+$('#tourner').addEventListener('click', tournerRoue);
+
+// --- Écran « Réglages » ---------------------------------------------------------------------------------------------
+async function chargerReglages() {
+  const [e, s] = await Promise.all([api('/api/etat'), api('/api/synchro')]);
+  $('#reglages-contenu').innerHTML = `
+    <div class="carte">
+      <h3>Données</h3>
+      <p>${e.mode === 'notion' ? 'Reliée à Notion : projets, tâches et séances.' : 'Mode démo : données fictives, tout reste en mémoire et rien n’est lu ni écrit dans Notion.'}</p>
+      ${s.attente ? `<p class="avertissement">${s.attente} séance${s.attente > 1 ? 's' : ''} en attente d’envoi vers Notion${s.erreur ? ` (${esc(s.erreur)})` : ''}. Nouvel essai toutes les 2 minutes.</p>` : ''}
+      <button class="btn-lien" type="button" id="rafraichir"${e.mode === 'notion' ? '' : ' disabled'}>${ico('refresh')}Rafraîchir Notion</button>
+      <p class="message" id="msg-rafraichir"></p>
+    </div>
+    <div class="carte">
+      <h3>Musique</h3>
+      <label class="case"><input id="r-musique" type="checkbox"${musiqueActive() ? ' checked' : ''}> Musique pendant le chrono</label>
+      <p class="note gauche">Les mix viennent de la base « Musique » de Notion : ajoute un lien YouTube, ou coche « Désactivé » pour en écarter un.</p>
+    </div>`;
+  $('#r-musique').addEventListener('change', (ev) => {
+    try { localStorage.setItem('bosse-musique', ev.target.checked ? 'oui' : 'non'); } catch {}
+  });
+  $('#rafraichir').addEventListener('click', async (ev) => {
+    ev.currentTarget.disabled = true;
+    try {
+      const r = await api('/api/notion/rafraichir', { method: 'POST' });
+      $('#msg-rafraichir').textContent = `${r.projets} projets, ${r.taches} tâches et ${r.sessions} séances de la semaine lus.${r.attente ? ` ${r.attente} séance(s) encore en attente.` : ''}`;
+    } catch (err) {
+      $('#msg-rafraichir').textContent = err.message;
+    }
+    ev.currentTarget.disabled = false;
+  });
+}
+
+// --- Navigation ----------------------------------------------------------------------------------------------------------
+const ECRANS = { maintenant: chargerMaintenant, chrono: chargerChrono, bilan: chargerBilan, projets: chargerProjets, taches: chargerTaches, roue: chargerRoue, reglages: chargerReglages };
+const SANS_NAV = ['connexion', 'chrono', 'bilan'];
+
+async function afficher() {
+  arreterChrono();
+  const nom = location.hash.slice(1) || 'maintenant';
+  const ecran = nom === 'connexion' || ECRANS[nom] ? nom : 'maintenant';
+  document.querySelectorAll('.ecran').forEach((s) => { s.hidden = s.id !== ecran; });
+  if (ecran !== 'chrono') Radio.arreter();
+  $('#nav').hidden = SANS_NAV.includes(ecran);
+  document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('actif', a.getAttribute('href') === '#' + ecran));
+  if (ecran === 'connexion') return $('#mdp').focus();
+  try {
+    // Un chrono est en cours (ou en attente de bilan) : on y retourne, d'où qu'on vienne.
+    if (!SANS_NAV.includes(ecran)) {
+      const { chrono: c } = await api('/api/chrono');
+      if (c) return void (location.hash = c.etat === 'fini' ? '#bilan' : '#chrono');
+    }
+    await ECRANS[ecran]();
+  } catch (err) {
+    if (location.hash !== '#connexion') {
+      const zone = $(`#${ecran} > div:last-child`);
+      if (zone) zone.innerHTML = `<div class="vide erreur"><p>${esc(err.message)}</p></div>`;
+    }
+  }
+}
+
+$('#form-connexion').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const msg = $('#form-connexion .message');
+  msg.textContent = '';
+  try {
+    await api('/api/connexion', { method: 'POST', body: { motDePasse: $('#mdp').value } });
+    $('#mdp').value = '';
+    location.hash = '#maintenant';
+    afficher();
+  } catch (err) {
+    msg.textContent = err.message;
+  }
+});
+
+window.addEventListener('hashchange', afficher);
+afficher();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

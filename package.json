@@ -1,0 +1,17 @@
+{
+  "name": "bosse",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BOSSE ! : l'action du moment, un chrono, un bilan (PWA reliée à Notion)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
+  }
+}
