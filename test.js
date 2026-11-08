@@ -206,7 +206,7 @@ test('Notion : lecture des projets, des tâches et des séances, sans aucune éc
     const { projets, taches, sessions } = await notion.lireTout();
     assert.deepStrictEqual(projets[0], {
       id: 'p1', nom: 'Taotl', type: 'Projet', statut: 'En cours', categorie: 'Autre', priorite: null, couleur: 'Vert', hex: '#5be37d', echeance: null,
-      prochaineEtape: 'finir les animation', derniereActivite: '2026-10-16', tempsCumule: 207, objectifHebdo: null, logo: true, icone: '', url: 'https://notion/p1',
+      prochaineEtape: 'finir les animation', derniereActivite: '2026-10-16', tempsCumule: 207, objectifHebdo: null, logo: true, logoLien: '', icone: '', resume: '', url: 'https://notion/p1',
     });
     assert.strictEqual(projets[1].statut, null); // Kalooflix : statut vide
     assert.strictEqual(projets[1].logo, false);
@@ -214,7 +214,7 @@ test('Notion : lecture des projets, des tâches et des séances, sans aucune éc
       id: 't1', titre: 'Inception', projetId: 'p1', statut: 'À faire', priorite: 'Haute', echeance: '2026-11-20', duree: 45, tempsPasse: 0, derniereFois: null, notes: 'à voir', url: 'https://notion/t1',
     });
     // Séances : celle sans date est ignorée ; la date garde l'heure.
-    assert.deepStrictEqual(sessions, [{ id: 's1', debut: '2026-11-06T18:00:00.000+01:00', duree: 30, tacheId: 't1', projetId: 'p1', titre: 'Inception · 30 min', bilan: 'ok' }]);
+    assert.deepStrictEqual(sessions, [{ id: 's1', debut: '2026-11-06T18:00:00.000+01:00', duree: 30, tacheId: 't1', projetId: 'p1', titre: 'Inception · 30 min', bilan: 'ok', origine: null }]);
     // La base « Tâches » est retrouvée par son titre, dans la page qui contient « Mes projets ».
     assert.ok(faux.appels.some((a) => a.cle === `GET /blocks/${PAGE}/children?page_size=100`));
     // Tâches déjà faites exclues côté Notion.
@@ -1108,9 +1108,310 @@ test('Notion : modifier l’objectif n’écrit que « Objectif de temps hebdo (
   });
 });
 
-test('la page contient les formulaires d’activité et de découpage, et charge etapes.js avant l’appli', async () => {
+test('la page contient la feuille de modification, les écrans séances et musique, le découpage, et charge etapes.js avant l’appli', async () => {
   const html = await (await fetch(base + '/')).text();
-  for (const id of ['form-activite', 'ajouter-activite', 'form-decoupe', 'decouper-taches', 'd-texte', 'd-apercu']) assert.match(html, new RegExp(`id="${id}"`));
+  for (const id of ['nouveau-projet', 'filtres-projets', 'form-decoupe', 'decouper-taches', 'd-texte', 'd-apercu', 'feuille', 'feuille-form', 'voir-faites', 'seances-contenu', 'ajouter-seance', 'bibliotheque-contenu', 'ajouter-lien']) assert.match(html, new RegExp(`id="${id}"`));
   assert.ok(html.indexOf('etapes.js') > 0 && html.indexOf('etapes.js') < html.indexOf('app.js'));
   assert.strictEqual((await fetch(base + '/etapes.js')).status, 200);
+});
+
+// ==========================================================================================
+// Tout modifier dans l'appli : tâches, projets, séances, musique
+// ==========================================================================================
+const edition = require('./edition');
+const refuse = (f, message) => assert.throws(f, (e) => e.status === 400 && message.test(e.message), `doit refuser (${message})`);
+
+test('saisie d’un projet : seuls les champs envoyés, tout est contrôlé', () => {
+  assert.deepStrictEqual(edition.champsProjet({ nom: '  Taotl  ', statut: 'En pause', priorite: 'Haute', echeance: '2026-12-01', objectifHebdo: 90, couleur: 'Rose', icone: 'TA', logo: 'https://exemple.fr/logo.png' }, { creation: true }), {
+    nom: 'Taotl', statut: 'En pause', priorite: 'Haute', echeance: '2026-12-01', objectifHebdo: 90, couleur: 'Rose', icone: 'TA', logo: 'https://exemple.fr/logo.png',
+  });
+  assert.deepStrictEqual(edition.champsProjet({ prochaineEtape: 'finir les animations' }), { prochaineEtape: 'finir les animations' }); // le reste n'est pas touché
+  assert.deepStrictEqual(edition.champsProjet({ objectifHebdo: null, priorite: '', echeance: null, couleur: null, logo: null, categorie: '' }), { objectifHebdo: null, priorite: null, echeance: null, couleur: null, logo: null, categorie: null }); // vider un champ
+  assert.strictEqual(edition.champsProjet({ objectifHebdo: 0 }).objectifHebdo, null);
+  refuse(() => edition.champsProjet({}, { creation: true }), /nom/i);
+  refuse(() => edition.champsProjet({ nom: '   ' }), /nom/i);
+  refuse(() => edition.champsProjet({ nom: 'x'.repeat(101) }), /100 caractères/);
+  refuse(() => edition.champsProjet({ type: 'Autre' }), /Type/);
+  refuse(() => edition.champsProjet({ statut: 'Fini' }), /Statut/);
+  refuse(() => edition.champsProjet({ priorite: 'Urgente' }), /Priorité/);
+  refuse(() => edition.champsProjet({ echeance: '12/01/2026' }), /Échéance/);
+  refuse(() => edition.champsProjet({ objectifHebdo: 5 }), /de 15 à 3000/);
+  refuse(() => edition.champsProjet({ couleur: 'Fuchsia' }), /Couleur/);
+  refuse(() => edition.champsProjet({ icone: 'beaucoup trop long' }), /Icône/);
+  refuse(() => edition.champsProjet({ logo: 'javascript:alert(1)' }), /Logo/);
+  refuse(() => edition.champsProjet({ logo: 'pas un lien' }), /Logo/);
+});
+
+test('saisie d’une tâche, d’une séance, d’un lien de musique', () => {
+  assert.deepStrictEqual(edition.champsTache({ titre: ' Inception ', projetId: '', duree: 45, priorite: 'Basse', echeance: null, notes: 'à voir', fait: true }), {
+    titre: 'Inception', projetId: null, duree: 45, priorite: 'Basse', echeance: null, notes: 'à voir', statut: 'Fait',
+  });
+  assert.strictEqual(edition.champsTache({ fait: false }).statut, 'À faire');
+  refuse(() => edition.champsTache({ titre: ' ' }), /titre/i);
+  refuse(() => edition.champsTache({ duree: 2 }), /de 5 à 240/);
+  refuse(() => edition.champsTache({ duree: '' }), /Durée/);
+  refuse(() => edition.champsTache({ fait: 'oui' }), /fait/);
+
+  assert.deepStrictEqual(edition.champsSeance({ jour: '2026-11-05', duree: 40, bilan: ' ok ' }, AUJ, { creation: true }), { duree: 40, jour: '2026-11-05', bilan: 'ok' });
+  assert.deepStrictEqual(edition.champsSeance({ bilan: 'x' }, AUJ), { bilan: 'x' });
+  refuse(() => edition.champsSeance({ jour: '2026-11-08', duree: 10 }, AUJ, { creation: true }), /futur/);
+  refuse(() => edition.champsSeance({ jour: '2024-01-01', duree: 10 }, AUJ, { creation: true }), /trop ancien/);
+  refuse(() => edition.champsSeance({ duree: 10 }, AUJ, { creation: true }), /jour/i);
+  refuse(() => edition.champsSeance({ jour: AUJ }, AUJ, { creation: true }), /Durée/);
+  refuse(() => edition.champsSeance({ duree: 0 }, AUJ), /de 1 à 600/);
+
+  assert.deepStrictEqual(edition.champsLien({ titre: '', lien: 'https://youtu.be/NVx5ZJCY6w4' }, { creation: true }), { titre: 'Sans titre', lien: 'https://youtu.be/NVx5ZJCY6w4' });
+  assert.deepStrictEqual(edition.champsLien({ desactive: true }), { desactive: true });
+  refuse(() => edition.champsLien({ titre: 'x', lien: 'https://exemple.com/musique.mp3' }, { creation: true }), /YouTube/);
+  refuse(() => edition.champsLien({ titre: 'x' }, { creation: true }), /YouTube/);
+  refuse(() => edition.champsLien({ desactive: 'oui' }), /vrai ou faux/);
+});
+
+test('API : modifier, rétablir et supprimer une tâche', async () => {
+  const ajout = (await post('/api/taches', { titre: 'À corriger', projetId: 'p-gorgee' })).corps;
+  const id = ajout.id;
+  const m = await json(`/api/taches/${id}`, { method: 'PATCH', body: { titre: ' Corrigée ', projetId: 'p-taotl', duree: 45, priorite: 'Haute', echeance: '2026-12-24', notes: 'une note' } });
+  assert.strictEqual(m.status, 200);
+  assert.deepStrictEqual([m.corps.titre, m.corps.projet.nom, m.corps.duree, m.corps.priorite, m.corps.echeance, m.corps.notes], ['Corrigée', 'Taotl', 45, 'Haute', '2026-12-24', 'une note']);
+  // vider des champs : hors projet, sans priorité ni échéance
+  const v = (await json(`/api/taches/${id}`, { method: 'PATCH', body: { projetId: null, priorite: null, echeance: null } })).corps;
+  assert.deepStrictEqual([v.projet, v.priorite, v.echeance, v.projetActif], [null, null, null, true]);
+  assert.strictEqual((await json(`/api/taches/${id}`, { method: 'PATCH', body: { projetId: 'fantome' } })).status, 400);
+  assert.strictEqual((await json(`/api/taches/${id}`, { method: 'PATCH', body: {} })).status, 400);
+  assert.strictEqual((await json(`/api/taches/${id}`, { method: 'PATCH', body: { duree: 1 } })).status, 400);
+  // terminée, retrouvée dans « Terminées », rétablie
+  await json(`/api/taches/${id}`, { method: 'PATCH', body: { fait: true } });
+  assert.ok(!(await json('/api/taches')).corps.some((t) => t.id === id));
+  const faites = (await json('/api/taches?statut=faites')).corps;
+  assert.ok(faites.some((t) => t.id === id && t.statut === 'Fait'));
+  await json(`/api/taches/${id}`, { method: 'PATCH', body: { fait: false } });
+  assert.ok((await json('/api/taches')).corps.some((t) => t.id === id));
+  // supprimer
+  assert.strictEqual((await json(`/api/taches/${id}`, { method: 'DELETE' })).status, 200);
+  assert.ok(!(await json('/api/taches')).corps.some((t) => t.id === id));
+  assert.strictEqual((await json(`/api/taches/${id}`, { method: 'DELETE' })).status, 404);
+});
+
+test('API : voir, créer, modifier et supprimer un projet (tous les champs, tous les statuts)', async () => {
+  const tous = (await json('/api/projets?tous=1')).corps;
+  assert.ok(tous.some((p) => p.nom === 'Projet en pause' && p.statut === 'En pause'));
+  assert.ok(!(await json('/api/projets')).corps.some((p) => p.nom === 'Projet en pause')); // sans ?tous : seulement « En cours »
+  const options = (await json('/api/options')).corps;
+  assert.deepStrictEqual(options.statuts, ['Idée', 'En cours', 'En pause', 'Terminé']);
+  assert.ok(options.categories.includes('École 42') && options.couleurs.includes('Turquoise') && options.priorites.length === 3);
+
+  const c = await post('/api/projets', { nom: ' Nouveau projet ', categorie: 'Autre', priorite: 'Moyenne', echeance: '2027-01-15', prochaineEtape: 'Commencer', couleur: 'Bleu', resume: 'Un résumé', objectifHebdo: 60 });
+  assert.strictEqual(c.status, 201);
+  assert.deepStrictEqual([c.corps.nom, c.corps.type, c.corps.statut, c.corps.categorie, c.corps.objectifHebdo, c.corps.hex, c.corps.resume], ['Nouveau projet', 'Projet', 'En cours', 'Autre', 60, '#4da3ff', 'Un résumé']);
+  assert.strictEqual((await post('/api/projets', { nom: 'nouveau PROJET' })).status, 400); // même nom (sans tenir compte des majuscules)
+  assert.strictEqual((await post('/api/projets', { nom: '' })).status, 400);
+
+  const id = c.corps.id;
+  const m = (await json(`/api/projets/${id}`, { method: 'PATCH', body: { nom: 'Renommé', type: 'Activité', statut: 'En pause', couleur: 'Rose', icone: 'RE', logo: 'https://exemple.fr/l.png', categorie: null, priorite: null } })).corps;
+  assert.deepStrictEqual([m.nom, m.type, m.statut, m.hex, m.icone, m.logo, m.logoLien, m.categorie, m.priorite], ['Renommé', 'Activité', 'En pause', '#ff6fb5', 'RE', true, 'https://exemple.fr/l.png', null, null]);
+  const sansLogo = (await json(`/api/projets/${id}`, { method: 'PATCH', body: { logo: null } })).corps;
+  assert.deepStrictEqual([sansLogo.logo, sansLogo.logoLien], [false, '']);
+  assert.ok((await json('/api/projets?tous=1')).corps.some((p) => p.id === id && p.statut === 'En pause'));
+  assert.ok(!(await json('/api/projets')).corps.some((p) => p.id === id)); // en pause : plus dans la liste « En cours »
+  await json(`/api/projets/${id}`, { method: 'PATCH', body: { statut: 'En cours' } });
+  assert.ok((await json('/api/projets')).corps.some((p) => p.id === id));
+  assert.strictEqual((await json(`/api/projets/${id}`, { method: 'PATCH', body: { statut: 'Fini' } })).status, 400);
+  assert.strictEqual((await json(`/api/projets/${id}`, { method: 'PATCH', body: { logo: 'javascript:alert(1)' } })).status, 400);
+
+  assert.strictEqual((await json(`/api/projets/${id}`, { method: 'DELETE' })).status, 200);
+  assert.ok(!(await json('/api/projets?tous=1')).corps.some((p) => p.id === id));
+  assert.strictEqual((await json(`/api/projets/${id}`, { method: 'DELETE' })).status, 404);
+});
+
+test('API : l’historique des séances, la séance oubliée, les corrections et la suppression ajustent les totaux', async () => {
+  const projet = async () => (await json('/api/projets')).corps.find((p) => p.id === 'p-gorgee');
+  const avant = await projet();
+  const hist = (await json('/api/seances')).corps;
+  assert.ok(hist.seances.length >= 1 && hist.seances.every((s) => s.id && s.jour && typeof s.duree === 'number'));
+
+  assert.strictEqual((await post('/api/seances', { projetId: 'p-gorgee', duree: 40 })).status, 400); // pas de jour
+  assert.strictEqual((await post('/api/seances', { projetId: 'p-gorgee', duree: 40, jour: ajouterJours(AUJ, 400) })).status, 400); // futur
+  assert.strictEqual((await post('/api/seances', { projetId: 'fantome', duree: 40, jour: aujourdhui() })).status, 400);
+  assert.strictEqual((await post('/api/seances', { tacheId: 'fantome', duree: 40, jour: aujourdhui() })).status, 400);
+  const jour = aujourdhui();
+  const ajout = await post('/api/seances', { tacheId: 't4', duree: 40, jour, bilan: 'oubliée' });
+  assert.strictEqual(ajout.status, 201);
+  assert.strictEqual((await projet()).tempsCumule, avant.tempsCumule + 40); // la tâche t4 est dans Gorgée : le projet suit
+  const seance = (await json('/api/seances')).corps.seances.find((s) => s.bilan === 'oubliée');
+  assert.deepStrictEqual([seance.duree, seance.jour, seance.projetNom, seance.titre], [40, jour, 'Gorgée', 'Gorgée : finaliser le jeu']);
+
+  const m = await json(`/api/seances/${seance.id}`, { method: 'PATCH', body: { duree: 60, bilan: 'corrigée' } });
+  assert.strictEqual(m.status, 200);
+  assert.deepStrictEqual([m.corps.duree, m.corps.bilan], [60, 'corrigée']);
+  assert.strictEqual((await projet()).tempsCumule, avant.tempsCumule + 60); // +20 de plus
+  const veille = ajouterJours(jour, -1);
+  assert.strictEqual((await json(`/api/seances/${seance.id}`, { method: 'PATCH', body: { jour: veille } })).corps.jour, veille);
+  assert.strictEqual((await json(`/api/seances/${seance.id}`, { method: 'PATCH', body: { duree: 0 } })).status, 400);
+  assert.strictEqual((await json(`/api/seances/${seance.id}`, { method: 'PATCH', body: {} })).status, 400);
+
+  assert.strictEqual((await json(`/api/seances/${seance.id}`, { method: 'DELETE' })).status, 200);
+  assert.strictEqual((await projet()).tempsCumule, avant.tempsCumule); // le temps est retiré
+  assert.ok(!(await json('/api/seances')).corps.seances.some((s) => s.id === seance.id));
+  assert.strictEqual((await json(`/api/seances/${seance.id}`, { method: 'DELETE' })).status, 404);
+  assert.strictEqual((await json('/api/seances/inconnue', { method: 'PATCH', body: { duree: 5 } })).status, 404);
+  // une séance sans projet ni tâche est possible
+  const libre = await post('/api/seances', { duree: 15, jour });
+  assert.strictEqual(libre.status, 201);
+  const l = (await json('/api/seances')).corps.seances.find((s) => s.titre === 'Séance hors projet');
+  await json(`/api/seances/${l.id}`, { method: 'DELETE' });
+});
+
+test('API : gérer la bibliothèque de musique (ajouter, modifier, désactiver, supprimer)', async () => {
+  const tout = async () => (await json('/api/musique?tout=1')).corps.lignes;
+  const radio = async () => (await json('/api/musique')).corps.entrees;
+  const depart = (await tout()).length;
+  assert.ok(depart >= 3 && (await tout()).every((l) => l.valide));
+
+  assert.strictEqual((await post('/api/musique', { titre: 'x', lien: 'https://exemple.com/a.mp3' })).status, 400);
+  assert.strictEqual((await post('/api/musique', { titre: 'x' })).status, 400);
+  const ajout = await post('/api/musique', { titre: ' Mix du dimanche ', lien: 'https://www.youtube.com/watch?v=dcDqyGXtK3c' });
+  assert.strictEqual(ajout.status, 201);
+  const id = ajout.corps.id;
+  assert.strictEqual((await tout()).length, depart + 1);
+  assert.ok((await radio()).some((e) => e.id === id && e.titre === 'Mix du dimanche' && e.videoId === 'dcDqyGXtK3c'));
+
+  assert.strictEqual((await json(`/api/musique/${id}`, { method: 'PATCH', body: { titre: 'Renommé' } })).status, 200);
+  assert.ok((await radio()).some((e) => e.id === id && e.titre === 'Renommé'));
+  await json(`/api/musique/${id}`, { method: 'PATCH', body: { desactive: true } });
+  assert.ok(!(await radio()).some((e) => e.id === id)); // désactivé : la radio n'y touche plus
+  assert.ok((await tout()).some((l) => l.id === id && l.desactive)); // mais il reste dans la liste de gestion
+  await json(`/api/musique/${id}`, { method: 'PATCH', body: { desactive: false, lien: 'https://youtu.be/s1hRXtF5AFo' } });
+  assert.ok((await radio()).some((e) => e.id === id && e.videoId === 's1hRXtF5AFo'));
+  assert.strictEqual((await json(`/api/musique/${id}`, { method: 'PATCH', body: { lien: 'pas un lien' } })).status, 400);
+  assert.strictEqual((await json(`/api/musique/${id}`, { method: 'PATCH', body: {} })).status, 400);
+
+  assert.strictEqual((await json(`/api/musique/${id}`, { method: 'DELETE' })).status, 200);
+  assert.strictEqual((await tout()).length, depart);
+  assert.strictEqual((await json(`/api/musique/${id}`, { method: 'DELETE' })).status, 404);
+  assert.strictEqual((await json('/api/musique/inconnu', { method: 'PATCH', body: { titre: 'x' } })).status, 404);
+});
+
+test('Notion : modifier une tâche, un projet, une séance, un lien : uniquement les champs envoyés', async () => {
+  await avecNotion(async () => {
+    const faux = fauxApi((cle, corps) => {
+      if (cle.startsWith('PATCH /pages/')) return { id: cle.split('/').pop(), url: 'u', properties: {} };
+      if (cle === 'POST /pages') return { id: 'nouvelle', url: 'u', properties: { Nom: txt('title', 'Neuf'), 'Titre': txt('title', 'Mix') } };
+      return null;
+    });
+    try {
+      await notion.modifierTache('t1', { titre: 'Neuf', projetId: null, duree: 45, priorite: null, echeance: '2026-12-01', notes: 'n', statut: 'Fait', inconnu: 'ignoré' });
+      let b = faux.appels.at(-1).body.properties;
+      assert.deepStrictEqual(cles(b), ['Durée estimée (min)', 'Notes', 'Priorité', 'Projet', 'Statut', 'Tâche', 'Échéance'].sort()); // « inconnu » n'est jamais écrit
+      assert.deepStrictEqual(b.Projet, { relation: [] });
+      assert.deepStrictEqual(b['Priorité'], { select: null });
+      assert.deepStrictEqual(b['Échéance'], { date: { start: '2026-12-01' } });
+
+      await notion.modifierTache('t1', { duree: 30 });
+      assert.deepStrictEqual(cles(faux.appels.at(-1).body.properties), ['Durée estimée (min)']);
+
+      await notion.modifierProjet('p1', { nom: 'Neuf', statut: 'En pause', categorie: null, objectifHebdo: null, couleur: 'Rose', logo: 'https://exemple.fr/l.png', icone: 'NE', resume: 'r', prochaineEtape: 'p', echeance: null, priorite: 'Haute', pirate: 'x' });
+      b = faux.appels.at(-1).body.properties;
+      assert.deepStrictEqual(cles(b), ['Catégorie', 'Couleur', 'Icône', 'Logo', 'Nom', 'Objectif / résumé', 'Objectif de temps hebdo (min)', 'Priorité', 'Prochaine étape', 'Statut', 'Échéance'].sort());
+      assert.deepStrictEqual(b.Logo, { files: [{ type: 'external', name: 'logo', external: { url: 'https://exemple.fr/l.png' } }] });
+      assert.deepStrictEqual(b['Objectif de temps hebdo (min)'], { number: null });
+      await notion.modifierProjet('p1', { logo: null });
+      assert.deepStrictEqual(faux.appels.at(-1).body.properties, { Logo: { files: [] } });
+
+      await notion.creerProjet({ nom: 'Neuf', type: 'Projet', categorie: 'Autre', objectifHebdo: 60 });
+      const creation = faux.appels.find((a) => a.cle === 'POST /pages');
+      assert.strictEqual(creation.body.parent.database_id, IDS.projets);
+      assert.deepStrictEqual(cles(creation.body.properties), ['Catégorie', 'Nom', 'Objectif de temps hebdo (min)', 'Statut', 'Type']);
+
+      await notion.supprimerPage('t9');
+      assert.deepStrictEqual(faux.appels.at(-1), { cle: 'PATCH /pages/t9', body: { archived: true } }); // corbeille, pas suppression définitive
+
+      await notion.modifierSeance('s1', { titre: 'X · 40 min', duree: 40, bilan: 'b', debut: '2026-11-05' });
+      assert.deepStrictEqual(cles(faux.appels.at(-1).body.properties), ['Bilan', 'Durée (min)', 'Début', 'Titre']);
+      await notion.modifierSeance('s1', { bilan: 'seulement' });
+      assert.deepStrictEqual(cles(faux.appels.at(-1).body.properties), ['Bilan']);
+
+      await notion.creerLien({ titre: 'Mix', lien: 'https://youtu.be/NVx5ZJCY6w4' });
+      const lien = faux.appels.filter((a) => a.cle === 'POST /pages').at(-1);
+      assert.strictEqual(lien.body.parent.database_id, IDS.musique);
+      assert.deepStrictEqual(cles(lien.body.properties), ['Lien YouTube', 'Titre']);
+      await notion.modifierLien('m1', { desactive: true });
+      assert.deepStrictEqual(faux.appels.at(-1).body.properties, { 'Désactivé': { checkbox: true } });
+    } finally {
+      faux.restaurer();
+    }
+  });
+});
+
+test('Notion : corriger ou supprimer une séance ajuste les temps sans jamais passer sous zéro ni toucher aux dates', async () => {
+  await avecNotion(async () => {
+    const faux = fauxApi((cle) => {
+      if (cle === 'GET /pages/p1') return { properties: { 'Temps cumulé (min)': nb(50) } };
+      if (cle === 'GET /pages/t1') return { properties: { 'Temps passé (min)': nb(10) } };
+      if (cle.startsWith('PATCH /pages/')) return {};
+      return null;
+    });
+    try {
+      await notion.ajusterTemps({ projetId: 'p1', tacheId: 't1', delta: -30 });
+      const patchs = faux.appels.filter((a) => a.cle.startsWith('PATCH'));
+      assert.deepStrictEqual(patchs.map((p) => [p.cle, p.body]), [
+        ['PATCH /pages/p1', { properties: { 'Temps cumulé (min)': { number: 20 } } }],
+        ['PATCH /pages/t1', { properties: { 'Temps passé (min)': { number: 0 } } }], // 10 − 30 : plafonné à 0
+      ]);
+      await notion.ajusterTemps({ projetId: null, tacheId: null, delta: 5 });
+      assert.strictEqual(faux.appels.length, 4); // rien à ajuster : aucune requête
+    } finally {
+      faux.restaurer();
+    }
+  });
+});
+
+test('une séance ajoutée après coup ne fait pas reculer « Dernière activité » (mémoire et Notion)', async () => {
+  const d = { projets: [projet('P', { derniereActivite: '2026-11-06' })], taches: [], sessions: [] };
+  appliquerSeance(d, { id: 's', debut: '2026-10-01', duree: 20, projetId: 'P', titre: 'x', type: 'projet' });
+  assert.strictEqual(d.projets[0].derniereActivite, '2026-11-06');
+  appliquerSeance(d, { id: 's2', debut: '2026-11-07', duree: 20, projetId: 'P', titre: 'x', type: 'projet' });
+  assert.strictEqual(d.projets[0].derniereActivite, '2026-11-07');
+  await avecNotion(async () => {
+    const faux = fauxApi((cle) => (cle === 'GET /pages/p1' ? { properties: { 'Temps cumulé (min)': nb(100), 'Dernière activité': date('2026-11-06') } } : cle.startsWith('PATCH') ? {} : null));
+    try {
+      await notion.majProjet('p1', { duree: 20, jour: '2026-10-01' });
+      assert.deepStrictEqual(cles(faux.appels.at(-1).body.properties), ['Temps cumulé (min)']); // date plus ancienne : inchangée
+      await notion.majProjet('p1', { duree: 20, jour: '2026-11-07' });
+      assert.deepStrictEqual(cles(faux.appels.at(-1).body.properties), ['Dernière activité', 'Temps cumulé (min)']);
+    } finally {
+      faux.restaurer();
+    }
+  });
+});
+
+test('Notion : tâches terminées et historique des séances sont lus avec les bons filtres', async () => {
+  await avecNotion(async () => {
+    const faux = fauxApi((cle) => {
+      if (cle === `POST /databases/${IDS.taches}/query`) return { results: [{ id: 'f1', url: 'u', properties: { 'Tâche': txt('title', 'Finie'), Statut: sel('Fait') } }], next_cursor: null };
+      if (cle === `POST /databases/${IDS.sessions}/query`) return { results: [{ id: 's1', properties: { Titre: txt('title', 'X · 30 min'), 'Début': date('2026-11-05'), 'Durée (min)': nb(30), Origine: sel('Ajout manuel') } }], next_cursor: null };
+      if (cle === 'GET /pages/s1') return { id: 's1', properties: { Titre: txt('title', 'X · 30 min'), 'Début': date('2026-11-05'), 'Durée (min)': nb(30) } };
+      return null;
+    });
+    try {
+      const faites = await notion.lireTachesFaites();
+      assert.deepStrictEqual(faites.map((t) => [t.titre, t.statut]), [['Finie', 'Fait']]);
+      assert.deepStrictEqual(faux.appels[0].body, { page_size: 50, filter: { property: 'Statut', select: { equals: 'Fait' } }, sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }] });
+      const seances = await notion.lireSeances('2026-10-01');
+      assert.strictEqual(seances[0].origine, 'Ajout manuel');
+      const q = faux.appels.at(-1).body;
+      assert.deepStrictEqual(q.filter, { property: 'Début', date: { on_or_after: '2026-10-01' } });
+      assert.deepStrictEqual(q.sorts, [{ property: 'Début', direction: 'descending' }]);
+      assert.strictEqual((await notion.lireSeance('s1')).duree, 30);
+      // origine « Ajout manuel » écrite dans la séance
+      const faux2 = fauxApi((cle) => (cle === 'POST /pages' ? { id: 'sess' } : null));
+      try {
+        await notion.creerSession({ ...SEANCE, origine: 'Ajout manuel' });
+        assert.strictEqual(faux2.appels[0].body.properties.Origine.select.name, 'Ajout manuel');
+      } finally {
+        faux2.restaurer();
+      }
+    } finally {
+      faux.restaurer();
+    }
+  });
 });

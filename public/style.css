@@ -271,3 +271,29 @@ form.obj-form input[type="number"] { width: 110px; min-height: 44px; margin: 0; 
 .apercu-liste li.plus { color: var(--texte-2); }
 .apercu-liste .puce { white-space: nowrap; flex: none; }
 .apercu-liste li span:first-child { min-width: 0; overflow-wrap: anywhere; }
+
+/* Modifier partout : la feuille, les filtres, les lignes cliquables */
+dialog#feuille { width: min(100vw, 560px); max-width: 100vw; max-height: 92vh; margin: auto auto 0; padding: 0; border: 1px solid var(--bord); border-bottom: 0; border-radius: 22px 22px 0 0; background: var(--surface-1); color: var(--texte); overflow: auto; }
+dialog#feuille::backdrop { background: rgba(5, 6, 12, .72); }
+#feuille-form { padding: var(--e4) var(--e4) calc(var(--e5) + env(safe-area-inset-bottom)); }
+.feuille-tete { display: flex; align-items: center; justify-content: space-between; gap: var(--e3); margin-bottom: var(--e4); }
+.feuille-tete h3 { font-size: 20px; }
+.feuille-actions { display: grid; gap: var(--e2); margin-top: var(--e3); }
+.btn-danger { min-height: 48px; background: transparent; border: 1px solid rgba(255, 107, 122, .5); border-radius: 14px; color: var(--rouge); }
+.aide-champ { color: var(--texte-2); font-size: 13px; margin: calc(var(--e2) * -1) 0 var(--e3); }
+.filtres { display: flex; gap: var(--e2); overflow-x: auto; padding-bottom: var(--e2); margin-bottom: var(--e3); scrollbar-width: none; }
+.filtres::-webkit-scrollbar { display: none; }
+.filtre { flex: none; min-height: 40px; padding: 0 var(--e3); border-radius: var(--r-puce); border: 1px solid var(--bord); background: transparent; color: var(--texte-2); font-size: 14px; }
+.filtre[aria-pressed="true"] { border-color: var(--turquoise); color: var(--turquoise); box-shadow: 0 0 10px rgba(45, 226, 208, .25); }
+.filtre .compte { margin-left: 2px; opacity: .8; }
+.ligne-btn { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; min-height: 44px; display: block; }
+.ligne-btn:focus-visible { outline-offset: 4px; border-radius: 8px; }
+.bilan-court { display: block; color: var(--texte-2); font-size: 13px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rond.rempli { border-color: var(--turquoise); color: var(--turquoise); background: rgba(45, 226, 208, .12); }
+.ligne.fait .ligne-titre { text-decoration: line-through; opacity: .75; }
+.retour { display: inline-flex; align-items: center; gap: 4px; color: var(--turquoise); text-decoration: none; min-height: 40px; font-size: 14px; }
+.retour .ico { transform: rotate(180deg); }
+.lien-carte { display: flex; align-items: center; justify-content: space-between; min-height: 48px; color: var(--texte); text-decoration: none; border-top: 1px solid var(--bord); margin-top: var(--e3); }
+.statut { margin-top: var(--e2); }
+.resume { color: var(--texte-2); font-size: 14px; margin: var(--e2) 0 0; }
+button.lien-notion { background: transparent; border: 0; cursor: pointer; }

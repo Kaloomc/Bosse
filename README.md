@@ -3,7 +3,7 @@
 Appli perso (PWA) qui dit **la seule action à faire maintenant**, lance un compte à rebours, demande un bilan, et range tout dans Notion.
 Cinquième appli de la suite (avec Repax, Argenx, Agendix et Brief) : même style technique (Express 5, mot de passe d'accès, jeton Notion en variable d'environnement, déploiement Docker sur le NAS).
 
-**État : étape 6.** L'action du moment, les projets (couleur, logo) et les tâches sont lus dans Notion ; on peut ajouter et cocher des tâches, lancer un compte à rebours (pause, +10 min), faire le bilan, et la séance part dans Notion. Une petite radio (mix YouTube de la base « Musique ») démarre avec le chrono, chaque séance se termine par un message d'encouragement avec le temps du jour et de la semaine, une roue tire un projet au sort quand on ne sait pas quoi faire, les activités (lire, réviser…) ont leur enveloppe de temps par semaine, et un gros chantier se découpe en étapes d'environ 30 minutes. Plan complet : [docs/PLAN.md](docs/PLAN.md). Bases Notion : [docs/NOTION.md](docs/NOTION.md).
+**État : étape 6, et tout est modifiable dans l'appli.** L'action du moment, les projets (couleur, logo) et les tâches sont lus dans Notion ; on peut ajouter et cocher des tâches, lancer un compte à rebours (pause, +10 min), faire le bilan, et la séance part dans Notion. Une petite radio (mix YouTube de la base « Musique ») démarre avec le chrono, chaque séance se termine par un message d'encouragement avec le temps du jour et de la semaine, une roue tire un projet au sort quand on ne sait pas quoi faire, les activités (lire, réviser…) ont leur enveloppe de temps par semaine, et un gros chantier se découpe en étapes d'environ 30 minutes. Plan complet : [docs/PLAN.md](docs/PLAN.md). Bases Notion : [docs/NOTION.md](docs/NOTION.md).
 
 ## Lancer en local
 
@@ -30,7 +30,7 @@ Tests : `npm test` (aucun réseau ; Notion est testé avec un faux `fetch`).
 ## Ce que BOSSE ! écrit dans Notion (et rien d'autre)
 
 - **Sessions de travail** : une ligne par séance (début, fin, durée, tâche, projet, bilan, prochaine étape, origine « Chrono »).
-- **Mes projets** : `Temps cumulé (min)` (+ durée), `Dernière activité`, `Prochaine étape` (seulement si tu l'as changée), `Statut` → Terminé si tu coches « Projet terminé », `Objectif de temps hebdo (min)` si tu le modifies dans l'appli, et une nouvelle ligne quand tu ajoutes une activité (avec la propriété `Type`, ajoutée à la base si elle manque).
+- **Mes projets** : tout champ modifié dans l'appli (nom, statut, couleur, logo par lien…), `Temps cumulé (min)` (+ durée), `Dernière activité`, `Prochaine étape` (seulement si tu l'as changée), `Statut` → Terminé si tu coches « Projet terminé », `Objectif de temps hebdo (min)` si tu le modifies dans l'appli, et une nouvelle ligne quand tu ajoutes une activité (avec la propriété `Type`, ajoutée à la base si elle manque).
 - **Tâches** : `Temps passé (min)`, `Dernière fois`, `Statut` (Fait / À faire), et les tâches créées dans l'appli.
 
 Si Notion est injoignable en fin de séance, la séance est gardée dans `attente.json` et renvoyée toutes les 2 minutes, sans doublon. Des tests vérifient les champs écrits.
@@ -58,3 +58,12 @@ Une **activité** (lire, réviser, brainstormer avec Claude…) est une ligne de
 ## Découper un gros chantier
 
 Onglet Tâches → **Découper** : une étape par ligne (puces et numéros acceptés), avec une durée facultative entre parenthèses (`Brancher le serveur (2 h)`, `(15 min)`, `(1h30)`). Chaque étape devient une tâche d'environ 30 minutes ; les étapes de plus de 45 minutes sont coupées en blocs (`… (1/4)` à `(4/4)`), si la case est cochée. Un aperçu en direct montre le résultat. Jusqu'à 30 tâches à la fois, créées dans l'ordre (les tâches sont lues dans l'ordre de création : à score égal, la première écrite passe d'abord). L'appli n'appelle aucun modèle : tu peux écrire la liste toi-même, ou la demander à Claude dans une conversation et la coller. Code : [public/etapes.js](public/etapes.js).
+
+## Tout modifier dans l'appli (sans repasser par Notion)
+
+- **Tâches** : touche une tâche pour la modifier (titre, projet, durée, priorité, échéance, notes, terminée ou non) ou la supprimer ; « Voir les tâches terminées » pour les rétablir.
+- **Projets et activités** : le crayon de chaque carte ouvre tous les champs (nom, type, statut, objectif de la semaine ou enveloppe, prochaine étape, échéance, priorité, catégorie, couleur, initiales, résumé, **logo par lien vers une image**) ; « Nouveau » en crée ; les filtres En cours / En pause / Idées / Terminés / Tous retrouvent tout. Le logo se règle par un **lien** : envoyer un fichier depuis le téléphone n'est pas géré (un logo déjà posé dans Notion reste affiché).
+- **Séances** (Réglages → Séances) : historique des 60 derniers jours, séance oubliée, correction de la durée, du jour ou du bilan, suppression. Le temps cumulé du projet et de la tâche est ajusté de la différence ; la « dernière activité » ne recule jamais.
+- **Musique** (Réglages → Musique) : ajouter, renommer, désactiver (la case) ou supprimer des liens YouTube.
+- Les suppressions mettent la page à la **corbeille de Notion** (récupérable) et demandent une confirmation. Un champ qu'on ne touche pas n'est jamais réécrit.
+- Contrôles : [edition.js](edition.js) (formats, longueurs, listes de choix) ; chaque écriture vers Notion passe par une liste de champs autorisés (testée).

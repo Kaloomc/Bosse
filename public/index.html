@@ -31,6 +31,9 @@
     <symbol id="i-pause" viewBox="0 0 24 24"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
     <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M2 18h1.4c1.3 0 2.5-.6 3.3-1.7l6.1-8.6c.7-1.1 2-1.7 3.3-1.7H22M18 2l4 4-4 4M2 6h1.9c1.5 0 2.9.9 3.6 2.2M22 18h-5.9c-1.3 0-2.6-.7-3.3-1.8l-.5-.8M18 14l4 4-4 4"/></symbol>
     <symbol id="i-music" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></symbol>
     <symbol id="i-volume" viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4zM15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14"/></symbol>
@@ -75,20 +78,9 @@
     <section id="projets" class="ecran" hidden>
       <div class="entete-ecran">
         <h2 class="titre-ecran">Projets</h2>
-        <button class="btn-ajout" type="button" id="ajouter-activite"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>Activité</button>
+        <button class="btn-ajout" type="button" id="nouveau-projet"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>Nouveau</button>
       </div>
-      <form id="form-activite" class="carte" hidden>
-        <p class="note gauche">Une activité (lire, réviser, brainstormer avec Claude…) fonctionne comme un projet : chrono, temps cumulé, objectif de la semaine. Son « enveloppe » est le temps que tu veux y passer chaque semaine.</p>
-        <label for="a-nom">Nom</label>
-        <input id="a-nom" type="text" maxlength="100" required autocomplete="off">
-        <div class="deux">
-          <div><label for="a-enveloppe">Enveloppe (min / semaine)</label><input id="a-enveloppe" type="number" min="15" max="3000" step="15" placeholder="ex. 120"></div>
-          <div><label for="a-couleur">Couleur</label>
-            <select id="a-couleur"><option>Turquoise</option><option>Violet</option><option>Bleu</option><option>Orange</option><option>Jaune</option><option>Rose</option><option>Vert</option><option>Rouge</option></select></div>
-        </div>
-        <button class="btn-principal" type="submit">Ajouter l’activité</button>
-        <p class="message" role="alert"></p>
-      </form>
+      <div class="filtres" id="filtres-projets" role="group" aria-label="Filtrer par statut"></div>
       <div id="projets-contenu"></div>
     </section>
 
@@ -129,6 +121,8 @@
         <p class="message" role="alert"></p>
       </form>
       <div id="taches-contenu"></div>
+      <button class="btn-lien" type="button" id="voir-faites">Voir les tâches terminées</button>
+      <div id="taches-faites"></div>
     </section>
 
     <section id="roue" class="ecran" hidden>
@@ -147,6 +141,24 @@
       <div id="roue-vide" class="vide" hidden><p>Rien à tirer au sort : ajoute une tâche ou un projet « En cours ».</p></div>
     </section>
 
+    <section id="seances" class="ecran" hidden>
+      <a class="retour" href="#reglages"><svg class="ico" aria-hidden="true"><use href="#i-chevron"/></svg>Réglages</a>
+      <div class="entete-ecran">
+        <h2 class="titre-ecran">Séances</h2>
+        <button class="btn-ajout" type="button" id="ajouter-seance"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>Séance oubliée</button>
+      </div>
+      <div id="seances-contenu"></div>
+    </section>
+
+    <section id="bibliotheque" class="ecran" hidden>
+      <a class="retour" href="#reglages"><svg class="ico" aria-hidden="true"><use href="#i-chevron"/></svg>Réglages</a>
+      <div class="entete-ecran">
+        <h2 class="titre-ecran">Musique</h2>
+        <button class="btn-ajout" type="button" id="ajouter-lien"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>Ajouter un lien</button>
+      </div>
+      <div id="bibliotheque-contenu"></div>
+    </section>
+
     <section id="reglages" class="ecran" hidden>
       <h2 class="titre-ecran">Réglages</h2>
       <div id="reglages-contenu"></div>
@@ -160,6 +172,21 @@
     <a href="#roue"><svg class="ico" aria-hidden="true"><use href="#i-shuffle"/></svg><span>Roue</span></a>
     <a href="#reglages"><svg class="ico" aria-hidden="true"><use href="#i-sliders"/></svg><span>Réglages</span></a>
   </nav>
+
+  <dialog id="feuille" aria-labelledby="feuille-titre">
+    <form id="feuille-form" novalidate>
+      <header class="feuille-tete">
+        <h3 id="feuille-titre"></h3>
+        <button type="button" class="m-bouton" id="feuille-fermer" aria-label="Fermer"><svg class="ico" aria-hidden="true"><use href="#i-x"/></svg></button>
+      </header>
+      <div id="feuille-champs"></div>
+      <p class="message" id="feuille-message" role="alert"></p>
+      <div class="feuille-actions">
+        <button type="submit" class="btn-principal" id="feuille-ok">Enregistrer</button>
+        <button type="button" class="btn-danger" id="feuille-suppr" hidden>Supprimer</button>
+      </div>
+    </form>
+  </dialog>
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="etapes.js"></script>

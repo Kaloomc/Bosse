@@ -14,6 +14,7 @@ const Radio = (() => {
   let coupe = false;
   let erreursDeSuite = 0;
   let minuteurBlocage = null;
+  let jouaitALEcran = false; // la musique jouait-elle quand l'écran était allumé ?
   let ecouteur = () => {};
   const etat = { actif: false, joue: false, bloque: false, titre: '', erreur: null };
   const prevenir = () => ecouteur({ ...etat, coupe });
@@ -84,6 +85,7 @@ const Radio = (() => {
 
   function surEtat(e) {
     etat.joue = e.data === ETATS.LECTURE || e.data === ETATS.MISE_EN_MEMOIRE;
+    if (document.visibilityState === 'visible') jouaitALEcran = etat.joue; // l'état « voulu » : celui d'avant la mise en veille
     if (e.data === ETATS.LECTURE) { etat.bloque = false; erreursDeSuite = 0; }
     if (e.data === ETATS.FINI && courant?.type === 'video') suivante();
     prevenir();
@@ -142,6 +144,13 @@ const Radio = (() => {
     courant = null;
     prevenir();
   }
+
+  // Quand le téléphone s'éteint ou que l'appli passe en arrière-plan, iOS et YouTube coupent le son d'un lecteur intégré : on ne
+  // peut pas l'empêcher depuis une page web. Au retour, la musique repart toute seule si elle jouait avant.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible' || !jouaitALEcran || !etat.actif) return;
+    setTimeout(() => { if (etat.actif && !etat.joue) reprendre(); }, 400);
+  });
 
   return { demarrer, suivante, pause, reprendre, basculerSon, arreter, surChangement: (f) => { ecouteur = f; }, get etat() { return { ...etat, coupe }; } };
 })();

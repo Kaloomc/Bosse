@@ -8,9 +8,11 @@ const chrono = require('./chrono');
 const stockage = require('./stockage');
 const synchro = require('./synchro');
 const { totaux, appliquerSeance } = require('./seances');
-const { aujourdhui, isoParis } = require('./temps');
+const { aujourdhui, isoParis, ajouterJours, jourDe } = require('./temps');
+const { duree: dureeTexte } = require('./projets');
 const { COULEURS, hexDe } = require('./projets');
 const bibliotheque = require('./musique');
+const edition = require('./edition');
 const encouragements = require('./encouragements');
 
 const app = express();
@@ -89,6 +91,7 @@ const publicTache = (t, d) => {
   const p = t.projetId ? d.projets.find((x) => x.id === t.projetId) : null;
   return {
     id: t.id, titre: t.titre, duree: t.duree || choix.DUREE_DEFAUT, priorite: t.priorite, echeance: t.echeance, url: t.url,
+    statut: t.statut, notes: t.notes || '', projetId: t.projetId || null, tempsPasse: t.tempsPasse || 0,
     projet: publicProjet(p), projetActif: !t.projetId || p?.statut === 'En cours',
   };
 };
@@ -155,6 +158,39 @@ app.post('/api/roue/tirer', async (req, res) => {
   res.json({ parts: liste.map(publicPart), index, action: publicCandidat(liste[index].candidats[0]) });
 });
 
+// --- Tâches ----------------------------------------------------------------------------------------------
+// Tâches à faire : celles sans projet d'abord (to-do simple), puis celles de chaque projet (le tri est fait par l'écran).
+// ?statut=faites : les tâches terminées (les plus récentes d'abord), pour les rétablir ou les corriger.
+app.get('/api/taches', async (req, res) => {
+  const d = await donnees();
+  if (req.query.statut === 'faites') {
+    const faites = notion.actif ? await notion.lireTachesFaites() : d.taches.filter((t) => t.statut === 'Fait');
+    return res.json(faites.map((t) => publicTache(t, d)));
+  }
+  res.json(d.taches.filter((t) => t.statut !== 'Fait').map((t) => publicTache(t, d)));
+});
+
+// Nouvelle tâche. projetId absent ou vide : to-do hors projet.
+app.post('/api/taches', async (req, res) => {
+  const d = await donnees();
+  const titre = String(req.body?.titre ?? '').trim().slice(0, 200);
+  verifier(titre, 'Donne un titre à la tâche.');
+  const projetId = req.body?.projetId || null;
+  verifier(!projetId || d.projets.some((p) => p.id === projetId && p.statut === 'En cours'), 'Projet inconnu ou pas « En cours ».');
+  const duree = req.body?.duree == null ? choix.DUREE_DEFAUT : Math.round(Number(req.body.duree));
+  verifier(Number.isFinite(duree) && duree >= 5 && duree <= 240, 'Durée de 5 à 240 minutes.');
+  const priorite = req.body?.priorite || null;
+  verifier(!priorite || PRIORITES.includes(priorite), 'Priorité inconnue.');
+  const echeance = req.body?.echeance || null;
+  verifier(!echeance || (JOUR.test(echeance) && !Number.isNaN(Date.parse(echeance))), 'Échéance invalide.');
+  const infos = { titre, projetId, duree, priorite, echeance };
+  const tache = notion.actif
+    ? await notion.creerTache(infos)
+    : { id: `t-${crypto.randomUUID()}`, statut: 'À faire', tempsPasse: 0, derniereFois: null, notes: '', url: null, ...infos };
+  d.taches = [...d.taches, tache];
+  res.status(201).json(publicTache(tache, d));
+});
+
 // Découper un gros chantier : crée plusieurs tâches d'un coup (une par étape), dans l'ordre. Corps : { projetId, etapes: [{ titre, duree }] }.
 // Si Notion s'arrête en route, on dit combien de tâches sont déjà créées (elles restent dans la liste).
 app.post('/api/taches/lot', async (req, res) => {
@@ -186,91 +222,211 @@ app.post('/api/taches/lot', async (req, res) => {
   res.status(201).json({ creees: creees.length, taches: creees.map((t) => publicTache(t, d)) });
 });
 
-// Nouvelle activité (lire, réviser, brainstormer avec Claude…) : une ligne « Activité » de « Mes projets », avec son enveloppe
-// de temps par semaine (en minutes, facultative) et sa couleur.
-app.post('/api/activites', async (req, res) => {
+// Modifier une tâche : titre, projet, durée, priorité, échéance, notes, et « fait » (vrai : terminée, faux : à refaire).
+// Seuls les champs envoyés changent. Une tâche terminée peut être modifiée ou rétablie.
+app.patch('/api/taches/:id', async (req, res) => {
   const d = await donnees();
-  const nom = String(req.body?.nom ?? '').trim().slice(0, 100);
-  verifier(nom, 'Donne un nom à l’activité.');
-  verifier(!d.projets.some((p) => p.nom.toLowerCase() === nom.toLowerCase() && p.statut === 'En cours'), 'Il existe déjà un projet ou une activité « En cours » avec ce nom.');
-  const objectifHebdo = req.body?.objectifHebdo == null || req.body.objectifHebdo === '' ? null : Math.round(Number(req.body.objectifHebdo));
-  verifier(objectifHebdo === null || (Number.isFinite(objectifHebdo) && objectifHebdo >= 15 && objectifHebdo <= 3000), 'Enveloppe de 15 à 3000 minutes par semaine.');
-  const couleur = req.body?.couleur || null;
-  verifier(!couleur || Object.hasOwn(COULEURS, couleur), 'Couleur inconnue.');
-  const infos = { nom, objectifHebdo, couleur };
-  const activite = notion.actif
-    ? await notion.creerActivite(infos)
-    : { id: `p-${crypto.randomUUID()}`, nom, type: 'Activité', statut: 'En cours', categorie: null, priorite: null, couleur, hex: hexDe(couleur), echeance: null, prochaineEtape: '', derniereActivite: null, tempsCumule: 0, objectifHebdo, logo: false, icone: '', url: null };
-  d.projets = [...d.projets, activite];
-  res.status(201).json(publicProjet(activite));
+  const champs = edition.champsTache(req.body);
+  verifier(Object.keys(champs).length, 'Rien à modifier.');
+  verifier(!champs.projetId || d.projets.some((p) => p.id === champs.projetId), 'Projet inconnu.');
+  const tache = d.taches.find((t) => t.id === req.params.id);
+  verifier(tache || notion.actif, 'Tâche introuvable : rafraîchis la liste.', 404); // en mode Notion, une tâche terminée n'est plus en mémoire
+  const relue = notion.actif ? await notion.modifierTache(req.params.id, champs) : null;
+  let cible = tache;
+  if (tache) Object.assign(tache, champs);
+  else if (relue && relue.statut !== 'Fait') d.taches = [...d.taches, (cible = relue)]; // une tâche rétablie revient dans la liste
+  else cible = relue;
+  res.json(publicTache(cible, d));
 });
 
-// Modifier l'objectif de temps de la semaine d'un projet ou d'une activité (objectifHebdo: minutes, ou null pour l'enlever).
+// Supprimer une tâche (mise à la corbeille de Notion : récupérable).
+app.delete('/api/taches/:id', async (req, res) => {
+  const d = await donnees();
+  verifier(d.taches.some((t) => t.id === req.params.id) || notion.actif, 'Tâche introuvable : rafraîchis la liste.', 404);
+  if (notion.actif) await notion.supprimerPage(req.params.id);
+  d.taches = d.taches.filter((t) => t.id !== req.params.id);
+  res.json({ ok: true });
+});
+
+// --- Projets et activités ----------------------------------------------------------------------------------
+// Ce que l'écran montre d'un projet, avec de quoi pré-remplir le formulaire de modification.
+const detailProjet = (p, d, t) => ({
+  ...publicProjet(p), statut: p.statut, priorite: p.priorite, echeance: p.echeance, tempsCumule: p.tempsCumule, derniereActivite: p.derniereActivite,
+  objectifHebdo: p.objectifHebdo, resume: p.resume || '', logoLien: p.logoLien || '', url: p.url,
+  tempsSemaine: t.parProjetSemaine.get(p.id) || 0, tempsJour: t.parProjetJour.get(p.id) || 0,
+  tachesOuvertes: d.taches.filter((x) => x.projetId === p.id && x.statut !== 'Fait').length,
+});
+
+// Projets et activités « En cours » (?tous=1 : tous les statuts, pour retrouver une idée, une pause, un projet terminé).
+app.get('/api/projets', async (req, res) => {
+  const d = await donnees();
+  const t = lesTotaux(d);
+  res.json(d.projets
+    .filter((p) => req.query.tous || p.statut === 'En cours')
+    .map((p) => detailProjet(p, d, t))
+    .sort((a, b) => b.tachesOuvertes - a.tachesOuvertes || a.nom.localeCompare(b.nom, 'fr')));
+});
+
+// Les listes déroulantes des formulaires : catégories (lues dans Notion), statuts, priorités, couleurs.
+const CATEGORIES_DEMO = ['École 42', 'Vidéo / vlog', 'Jeu / dev', 'Autre'];
+let optionsLues = null; // { t, categories }
+app.get('/api/options', async (req, res) => {
+  if (notion.actif && (!optionsLues || Date.now() - optionsLues.t > 10 * 60e3)) {
+    try {
+      optionsLues = { t: Date.now(), categories: (await notion.lireOptions()).categories };
+    } catch (err) {
+      console.error('Notion (options) :', err.message);
+    }
+  }
+  res.json({ categories: optionsLues?.categories?.length ? optionsLues.categories : CATEGORIES_DEMO, statuts: edition.STATUTS, priorites: PRIORITES, couleurs: Object.keys(COULEURS), types: edition.TYPES });
+});
+
+// Les champs d'un projet tels qu'ils sont gardés en mémoire (la couleur donne la teinte, le logo est un lien).
+function appliquerProjet(p, champs) {
+  const { logo, ...reste } = champs;
+  Object.assign(p, reste);
+  if ('couleur' in champs) p.hex = hexDe(champs.couleur);
+  if ('logo' in champs) Object.assign(p, { logoLien: logo || '', logo: !!logo });
+}
+
+// Nouveau projet ou nouvelle activité (type Projet par défaut). Seul le nom est obligatoire.
+async function creerProjetOuActivite(req, res, typeImpose) {
+  const d = await donnees();
+  const champs = edition.champsProjet({ ...req.body, ...(typeImpose && { type: typeImpose }) }, { creation: true });
+  champs.type ??= 'Projet';
+  verifier(!d.projets.some((p) => p.nom.toLowerCase() === champs.nom.toLowerCase() && p.statut === 'En cours'), 'Il existe déjà un projet ou une activité « En cours » avec ce nom.');
+  const aEcrire = Object.fromEntries(Object.entries(champs).filter(([, v]) => v !== null && v !== ''));
+  let projet;
+  if (notion.actif) projet = await notion.creerProjet(aEcrire);
+  else {
+    projet = { id: `p-${crypto.randomUUID()}`, nom: champs.nom, type: champs.type, statut: 'En cours', categorie: null, priorite: null, couleur: null, hex: hexDe(null), echeance: null, prochaineEtape: '', derniereActivite: null, tempsCumule: 0, objectifHebdo: null, logo: false, logoLien: '', icone: '', resume: '', url: null };
+    appliquerProjet(projet, aEcrire);
+  }
+  d.projets = [...d.projets, projet];
+  res.status(201).json(detailProjet(projet, d, lesTotaux(d)));
+}
+app.post('/api/projets', (req, res) => creerProjetOuActivite(req, res, null));
+app.post('/api/activites', (req, res) => creerProjetOuActivite(req, res, 'Activité')); // le formulaire « + Activité » : même chose, type imposé
+
+// Modifier un projet ou une activité : nom, type, statut, catégorie, priorité, échéance, prochaine étape, objectif de la semaine
+// (objectifHebdo : minutes, ou null / 0 pour l'enlever), couleur, icône, résumé, logo (un lien vers une image, ou null pour l'enlever).
+// Seuls les champs envoyés changent.
 app.patch('/api/projets/:id', async (req, res) => {
   const d = await donnees();
   const projet = d.projets.find((p) => p.id === req.params.id);
   verifier(projet, 'Projet introuvable : rafraîchis la liste.', 404);
-  const brut = req.body?.objectifHebdo;
-  verifier(brut === null || Number.isFinite(brut), 'Indique l’objectif en minutes par semaine (ou rien pour l’enlever).');
-  const objectifHebdo = brut === null || brut === 0 ? null : Math.round(brut);
-  verifier(objectifHebdo === null || (objectifHebdo >= 15 && objectifHebdo <= 3000), 'Objectif de 15 à 3000 minutes par semaine.');
-  if (notion.actif) await notion.majObjectif(projet.id, objectifHebdo);
-  projet.objectifHebdo = objectifHebdo;
-  res.json({ id: projet.id, objectifHebdo });
+  const champs = edition.champsProjet(req.body);
+  verifier(Object.keys(champs).length, 'Rien à modifier.');
+  if (notion.actif) await notion.modifierProjet(projet.id, champs);
+  appliquerProjet(projet, champs);
+  res.json(detailProjet(projet, d, lesTotaux(d)));
 });
 
-// Projets et activités « En cours », avec leurs tâches ouvertes et le temps de la semaine.
-app.get('/api/projets', async (req, res) => {
+// Supprimer un projet ou une activité (corbeille de Notion : récupérable). Ses séances et ses tâches restent dans Notion.
+app.delete('/api/projets/:id', async (req, res) => {
   const d = await donnees();
+  verifier(d.projets.some((p) => p.id === req.params.id), 'Projet introuvable : rafraîchis la liste.', 404);
+  if (notion.actif) await notion.supprimerPage(req.params.id);
+  d.projets = d.projets.filter((p) => p.id !== req.params.id);
+  res.json({ ok: true });
+});
+
+// --- Séances : historique, séance oubliée, corrections ---------------------------------------------------------
+// Les totaux du projet et de la tâche suivent : une séance corrigée ou supprimée change le temps cumulé de la différence.
+const publicSeance = (s, d) => {
+  const projet = s.projetId && d.projets.find((p) => p.id === s.projetId);
+  return {
+    id: s.id, jour: jourDe(s.debut), debut: s.debut, duree: s.duree, bilan: s.bilan || '', origine: s.origine || null, titre: s.titre,
+    projetId: s.projetId || null, projetNom: projet?.nom ?? null, projetHex: projet?.hex ?? null, tacheId: s.tacheId || null,
+  };
+};
+const trier = (liste) => [...liste].sort((a, b) => jourDe(b.debut).localeCompare(jourDe(a.debut)) || b.debut.localeCompare(a.debut));
+
+// Ajuste en mémoire le temps cumulé du projet et le temps passé de la tâche (jamais sous zéro).
+function ajusterMemoire(d, { projetId, tacheId, delta }) {
+  const projet = projetId && d.projets.find((p) => p.id === projetId);
+  if (projet) projet.tempsCumule = Math.max(0, (projet.tempsCumule || 0) + delta);
+  const tache = tacheId && d.taches.find((t) => t.id === tacheId);
+  if (tache) tache.tempsPasse = Math.max(0, (tache.tempsPasse || 0) + delta);
+}
+
+// L'historique (45 jours par défaut, 366 au maximum), les plus récentes d'abord.
+app.get('/api/seances', async (req, res) => {
+  const d = await donnees();
+  const jours = Math.min(366, Math.max(1, Math.round(Number(req.query.jours)) || 45));
+  const depuis = ajouterJours(aujourdhui(), -jours);
+  const liste = notion.actif ? await notion.lireSeances(depuis) : (d.sessions || []).filter((s) => jourDe(s.debut) >= depuis);
+  res.json({ depuis, seances: trier(liste).map((s) => publicSeance(s, d)) });
+});
+
+// Séance oubliée : { jour, duree, bilan, tacheId ou projetId }. Envoyée à Notion comme une séance de chrono (origine « Ajout manuel »).
+app.post('/api/seances', async (req, res) => {
+  const d = await donnees();
+  const champs = edition.champsSeance(req.body, aujourdhui(), { creation: true });
+  const tache = req.body?.tacheId ? d.taches.find((t) => t.id === req.body.tacheId) : null;
+  verifier(!req.body?.tacheId || tache, 'Tâche inconnue.');
+  const projetId = tache ? tache.projetId : req.body?.projetId || null;
+  const projet = projetId ? d.projets.find((p) => p.id === projetId) : null;
+  verifier(!projetId || projet, 'Projet inconnu.');
+  const seance = {
+    id: crypto.randomUUID(), debut: champs.jour, fin: null, duree: champs.duree, tacheId: tache?.id || null, projetId: projet?.id || null,
+    titre: tache?.titre || projet?.nom || 'Séance hors projet', type: tache ? 'tache' : 'projet', origine: 'Ajout manuel',
+    bilan: champs.bilan || '', prochaineEtape: '', termine: false,
+  };
+  appliquerSeance(d, seance);
+  let attente = 0;
+  let erreur = null;
+  if (notion.actif) {
+    synchro.enfiler(seance);
+    await envoyerEnAttente();
+    ({ attente, erreur } = synchro.etat());
+  }
   const t = lesTotaux(d);
-  const ouvertes = new Map();
-  for (const x of d.taches) if (x.projetId && x.statut !== 'Fait') ouvertes.set(x.projetId, (ouvertes.get(x.projetId) || 0) + 1);
-  res.json(d.projets
-    .filter((p) => p.statut === 'En cours')
-    .map((p) => ({
-      ...publicProjet(p), priorite: p.priorite, echeance: p.echeance, tempsCumule: p.tempsCumule, derniereActivite: p.derniereActivite,
-      objectifHebdo: p.objectifHebdo, tempsSemaine: t.parProjetSemaine.get(p.id) || 0, tempsJour: t.parProjetJour.get(p.id) || 0,
-      tachesOuvertes: ouvertes.get(p.id) || 0, url: p.url,
-    }))
-    .sort((a, b) => b.tachesOuvertes - a.tachesOuvertes || a.nom.localeCompare(b.nom, 'fr')));
+  res.status(201).json({ ok: true, totaux: { jour: t.jour, semaine: t.semaine }, enAttente: attente > 0, erreur });
 });
 
-// Tâches à faire : celles sans projet d'abord (to-do simple), puis celles de chaque projet (le tri est fait par l'écran).
-app.get('/api/taches', async (req, res) => {
+// Retrouve une séance (en mémoire en démo ; relue dans Notion sinon, l'historique n'étant pas gardé).
+async function trouverSeance(d, id) {
+  if (notion.actif) return notion.lireSeance(id);
+  return (d.sessions || []).find((s) => s.id === id) || null;
+}
+
+// Corriger une séance : durée, bilan, jour.
+app.patch('/api/seances/:id', async (req, res) => {
   const d = await donnees();
-  res.json(d.taches.filter((t) => t.statut !== 'Fait').map((t) => publicTache(t, d)));
+  const champs = edition.champsSeance(req.body, aujourdhui());
+  verifier(Object.keys(champs).length, 'Rien à modifier.');
+  const s = await trouverSeance(d, req.params.id);
+  verifier(s, 'Séance introuvable.', 404);
+  const delta = champs.duree === undefined ? 0 : champs.duree - s.duree;
+  const nouveau = { duree: champs.duree, bilan: champs.bilan, debut: champs.jour === undefined ? undefined : s.debut.includes('T') ? champs.jour + s.debut.slice(10) : champs.jour };
+  if (champs.duree !== undefined && /\s·\s[^·]+$/.test(s.titre || '')) nouveau.titre = `${s.titre.replace(/\s·\s[^·]+$/, '')} · ${dureeTexte(champs.duree)}`; // le titre porte la durée
+  if (notion.actif) {
+    await notion.modifierSeance(s.id, Object.fromEntries(Object.entries(nouveau).filter(([, v]) => v !== undefined)));
+    if (delta) await notion.ajusterTemps({ projetId: s.projetId, tacheId: s.tacheId, delta });
+  }
+  const enMemoire = (d.sessions || []).find((x) => x.id === s.id);
+  if (enMemoire) Object.assign(enMemoire, Object.fromEntries(Object.entries(nouveau).filter(([, v]) => v !== undefined)));
+  if (delta) ajusterMemoire(d, { projetId: s.projetId, tacheId: s.tacheId, delta });
+  res.json(publicSeance({ ...s, ...Object.fromEntries(Object.entries(nouveau).filter(([, v]) => v !== undefined)) }, d));
 });
 
-// Nouvelle tâche. projetId absent ou vide : to-do hors projet.
-app.post('/api/taches', async (req, res) => {
+// Supprimer une séance : son temps est retiré du projet et de la tâche.
+app.delete('/api/seances/:id', async (req, res) => {
   const d = await donnees();
-  const titre = String(req.body?.titre ?? '').trim().slice(0, 200);
-  verifier(titre, 'Donne un titre à la tâche.');
-  const projetId = req.body?.projetId || null;
-  verifier(!projetId || d.projets.some((p) => p.id === projetId && p.statut === 'En cours'), 'Projet inconnu ou pas « En cours ».');
-  const duree = req.body?.duree == null ? choix.DUREE_DEFAUT : Math.round(Number(req.body.duree));
-  verifier(Number.isFinite(duree) && duree >= 5 && duree <= 240, 'Durée de 5 à 240 minutes.');
-  const priorite = req.body?.priorite || null;
-  verifier(!priorite || PRIORITES.includes(priorite), 'Priorité inconnue.');
-  const echeance = req.body?.echeance || null;
-  verifier(!echeance || (JOUR.test(echeance) && !Number.isNaN(Date.parse(echeance))), 'Échéance invalide.');
-  const infos = { titre, projetId, duree, priorite, echeance };
-  const tache = notion.actif
-    ? await notion.creerTache(infos)
-    : { id: `t-${crypto.randomUUID()}`, statut: 'À faire', tempsPasse: 0, derniereFois: null, notes: '', url: null, ...infos };
-  d.taches = [...d.taches, tache];
-  res.status(201).json(publicTache(tache, d));
-});
-
-// Cocher (fait: true) ou décocher (fait: false) une tâche.
-app.patch('/api/taches/:id', async (req, res) => {
-  const d = await donnees();
-  const tache = d.taches.find((t) => t.id === req.params.id);
-  verifier(tache, 'Tâche introuvable : rafraîchis la liste.', 404);
-  verifier(typeof req.body?.fait === 'boolean', 'Indique « fait » : vrai ou faux.');
-  if (notion.actif) await notion.statutTache(tache.id, req.body.fait);
-  tache.statut = req.body.fait ? 'Fait' : 'À faire';
-  res.json({ id: tache.id, statut: tache.statut });
+  const s = await trouverSeance(d, req.params.id);
+  verifier(s, 'Séance introuvable.', 404);
+  if (notion.actif) {
+    await notion.supprimerPage(s.id);
+    try {
+      await notion.ajusterTemps({ projetId: s.projetId, tacheId: s.tacheId, delta: -s.duree });
+    } catch (err) {
+      throw echec(502, `Séance supprimée, mais le temps cumulé n’a pas pu être corrigé (${err.message}).`);
+    }
+  }
+  d.sessions = (d.sessions || []).filter((x) => x.id !== s.id);
+  ajusterMemoire(d, { projetId: s.projetId, tacheId: s.tacheId, delta: -s.duree });
+  res.json({ ok: true });
 });
 
 // --- Chrono (compte à rebours) ---------------------------------------------------------------------
@@ -362,17 +518,56 @@ app.post('/api/bilan', async (req, res) => {
 // Séances en attente d'envoi vers Notion.
 app.get('/api/synchro', (req, res) => res.json(synchro.etat()));
 
-// Bibliothèque de musique (liens YouTube de la base Notion « Musique »), gardée 5 minutes.
-let cacheMusique = null; // { t, entrees, message }
-app.get('/api/musique', async (req, res) => {
+// --- Bibliothèque de musique (liens YouTube de la base Notion « Musique ») --------------------------------------
+// Les lignes sont gardées 5 minutes ; la radio ne reçoit que les liens valides et non désactivés (?tout=1 : tout, pour l'écran de gestion).
+let cacheMusique = null; // { t, lignes, message }
+const demoMusique = bibliotheque.DEMO.map((l) => ({ ...l, desactive: false })); // démo : tout reste en mémoire
+async function lignesMusique() {
+  if (!notion.actif) return { lignes: demoMusique, message: null };
   if (!cacheMusique || Date.now() - cacheMusique.t > 5 * 60e3) {
-    if (!notion.actif) cacheMusique = { t: Date.now(), entrees: bibliotheque.entrees(bibliotheque.DEMO), message: null };
-    else {
-      const lignes = await notion.lireMusique();
-      cacheMusique = { t: Date.now(), entrees: lignes ? bibliotheque.entrees(lignes) : [], message: lignes ? null : 'La base « Musique » n’est pas dans la même page que « Mes projets ».' };
-    }
+    const lignes = await notion.lireMusique();
+    cacheMusique = { t: Date.now(), lignes: lignes || [], message: lignes ? null : 'La base « Musique » n’est pas dans la même page que « Mes projets ».' };
   }
-  res.json({ entrees: cacheMusique.entrees, message: cacheMusique.message });
+  return cacheMusique;
+}
+app.get('/api/musique', async (req, res) => {
+  const { lignes, message } = await lignesMusique();
+  if (req.query.tout) {
+    return res.json({ message, lignes: lignes.map((l) => ({ id: l.id, titre: l.titre || 'Sans titre', lien: l.lien, desactive: !!l.desactive, valide: !!bibliotheque.analyserLien(l.lien || '') })) });
+  }
+  res.json({ entrees: bibliotheque.entrees(lignes), message });
+});
+
+app.post('/api/musique', async (req, res) => {
+  const champs = edition.champsLien(req.body, { creation: true });
+  const { lignes } = await lignesMusique();
+  const ligne = notion.actif ? await notion.creerLien(champs) : { id: `m-${crypto.randomUUID()}`, ...champs, desactive: false };
+  if (notion.actif) cacheMusique = null;
+  else lignes.push(ligne);
+  res.status(201).json(ligne);
+});
+
+app.patch('/api/musique/:id', async (req, res) => {
+  const champs = edition.champsLien(req.body);
+  verifier(Object.keys(champs).length, 'Rien à modifier.');
+  const { lignes } = await lignesMusique();
+  const ligne = lignes.find((l) => l.id === req.params.id);
+  verifier(ligne, 'Lien introuvable : rafraîchis la liste.', 404);
+  if (notion.actif) {
+    await notion.modifierLien(ligne.id, champs);
+    cacheMusique = null;
+  } else Object.assign(ligne, champs);
+  res.json({ ...ligne, ...champs });
+});
+
+app.delete('/api/musique/:id', async (req, res) => {
+  const { lignes } = await lignesMusique();
+  verifier(lignes.some((l) => l.id === req.params.id), 'Lien introuvable : rafraîchis la liste.', 404);
+  if (notion.actif) {
+    await notion.supprimerPage(req.params.id);
+    cacheMusique = null;
+  } else lignes.splice(lignes.findIndex((l) => l.id === req.params.id), 1);
+  res.json({ ok: true });
 });
 
 // Logo d'un projet. Seuls les projets connus sont acceptés ; un lien Notion frais est demandé à chaque fois,

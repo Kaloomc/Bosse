@@ -375,26 +375,106 @@ async function chargerBilan() {
   });
 }
 
+// --- La feuille de modification --------------------------------------------------------------------------------------
+// Une seule fenêtre sert à créer ou modifier n'importe quoi (projet, activité, tâche, séance, lien de musique) :
+// feuille({ titre, champs, valeurs, enregistrer(valeurs), supprimer() }) ; champs : [{ nom, label, type, options, … }].
+let feuilleCourante = null;
+const champHtml = (c, valeur) => {
+  const id = `f-${c.nom}`;
+  const v = valeur ?? '';
+  const aide = c.aide ? `<p class="aide-champ">${esc(c.aide)}</p>` : '';
+  if (c.type === 'checkbox') return `<label class="case"><input id="${id}" type="checkbox"${valeur ? ' checked' : ''}> ${esc(c.label)}</label>${aide}`;
+  const etiquette = `<label for="${id}">${esc(c.label)}</label>`;
+  if (c.type === 'select') return `${etiquette}<select id="${id}">${c.options.map((o) => `<option value="${esc(o.v)}"${String(o.v) === String(v) ? ' selected' : ''}>${esc(o.l)}</option>`).join('')}</select>${aide}`;
+  if (c.type === 'textarea') return `${etiquette}<textarea id="${id}" rows="3" maxlength="${c.max || 2000}" placeholder="${esc(c.placeholder || '')}">${esc(v)}</textarea>${aide}`;
+  const attrs = [c.min != null && `min="${c.min}"`, c.max != null && `max="${c.max}"`, c.step && `step="${c.step}"`, c.maxlength && `maxlength="${c.maxlength}"`, c.placeholder && `placeholder="${esc(c.placeholder)}"`, c.requis && 'required'].filter(Boolean).join(' ');
+  return `${etiquette}<input id="${id}" type="${c.type}" value="${esc(v)}" ${attrs} autocomplete="off">${aide}`;
+};
+function lireChamps(champs) {
+  const sortie = {};
+  for (const c of champs) {
+    const el = $(`#f-${c.nom}`);
+    sortie[c.nom] = c.type === 'checkbox' ? el.checked : c.type === 'number' ? (el.value === '' ? null : Number(el.value)) : el.value.trim();
+  }
+  return sortie;
+}
+// Les champs qui ont changé (une valeur vide et « rien » sont la même chose).
+const changements = (avant, apres) => Object.fromEntries(Object.entries(apres).filter(([k, v]) => (avant[k] ?? '') !== (v ?? '')));
+
+function feuille({ titre, champs, valeurs = {}, libelle = 'Enregistrer', enregistrer, supprimer, confirmation }) {
+  $('#feuille-titre').textContent = titre;
+  $('#feuille-champs').innerHTML = champs.map((c) => champHtml(c, valeurs[c.nom])).join('');
+  $('#feuille-message').textContent = '';
+  $('#feuille-ok').textContent = libelle;
+  $('#feuille-ok').disabled = false;
+  $('#feuille-suppr').hidden = !supprimer;
+  feuilleCourante = { champs, enregistrer, supprimer, confirmation };
+  const dlg = $('#feuille');
+  if (typeof dlg.showModal === 'function') dlg.showModal();
+  else dlg.setAttribute('open', '');
+  $('#feuille-champs input, #feuille-champs select, #feuille-champs textarea')?.focus();
+}
+function fermerFeuille() {
+  const dlg = $('#feuille');
+  if (typeof dlg.close === 'function') dlg.close();
+  else dlg.removeAttribute('open');
+  feuilleCourante = null;
+}
+$('#feuille-fermer').addEventListener('click', fermerFeuille);
+$('#feuille').addEventListener('click', (ev) => { if (ev.target === $('#feuille')) fermerFeuille(); }); // un appui à côté ferme
+$('#feuille').addEventListener('close', () => { feuilleCourante = null; });
+$('#feuille-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  if (!feuilleCourante) return;
+  const manque = feuilleCourante.champs.find((c) => c.requis && !$(`#f-${c.nom}`).value.trim());
+  if (manque) return void ($('#feuille-message').textContent = `${manque.label} : à remplir.`);
+  $('#feuille-ok').disabled = true;
+  try {
+    await feuilleCourante.enregistrer(lireChamps(feuilleCourante.champs));
+    fermerFeuille();
+  } catch (err) {
+    $('#feuille-message').textContent = err.message;
+    $('#feuille-ok').disabled = false;
+  }
+});
+$('#feuille-suppr').addEventListener('click', async () => {
+  if (!feuilleCourante?.supprimer || !confirm(feuilleCourante.confirmation || 'Supprimer ? Cette action part à la corbeille de Notion (récupérable).')) return;
+  try {
+    await feuilleCourante.supprimer();
+    fermerFeuille();
+  } catch (err) {
+    $('#feuille-message').textContent = err.message;
+  }
+});
+
+let optionsLues = null;
+const options = async () => (optionsLues ??= await api('/api/options'));
+const choixListe = (valeurs, vide) => [...(vide ? [{ v: '', l: vide }] : []), ...valeurs.map((v) => ({ v, l: v }))];
+
 // --- Écran « Projets » ---------------------------------------------------------------------------------
-// Objectif de la semaine d'un projet, ou enveloppe de temps d'une activité : barre, temps restant, et bouton pour le modifier.
+// Objectif de la semaine d'un projet, ou enveloppe de temps d'une activité : barre et temps restant.
 function zoneObjectif(p) {
   const activite = p.type === 'Activité';
-  const mot = activite ? 'enveloppe' : 'objectif';
-  const bouton = `<button class="btn-texte" type="button" data-objectif="${esc(p.id)}" data-valeur="${p.objectifHebdo || ''}">${p.objectifHebdo ? 'Modifier' : activite ? 'Fixer une enveloppe' : 'Fixer un objectif'}</button>`;
-  if (!p.objectifHebdo) return `<div class="objectif objectif-zone"><span class="objectif-texte">Pas d’${mot} cette semaine</span>${bouton}</div>`;
+  if (!p.objectifHebdo) return `<div class="objectif"><span class="objectif-texte">Pas d’${activite ? 'enveloppe' : 'objectif'} cette semaine</span></div>`;
   const reste = p.objectifHebdo - p.tempsSemaine;
-  return `<div class="objectif objectif-zone">${barre(p.tempsSemaine, p.objectifHebdo)}
-    <span class="objectif-texte">${duree(p.tempsSemaine)} sur ${duree(p.objectifHebdo)} cette semaine${reste <= 0 ? ' · atteint' : ` · il reste ${duree(reste)}`}</span>${bouton}</div>`;
+  return `<div class="objectif">${barre(p.tempsSemaine, p.objectifHebdo)}
+    <span class="objectif-texte">${duree(p.tempsSemaine)} sur ${duree(p.objectifHebdo)} cette semaine${reste <= 0 ? ' · atteint' : ` · il reste ${duree(reste)}`}</span></div>`;
 }
+
+const STATUTS_FILTRES = [['En cours', 'En cours'], ['En pause', 'En pause'], ['Idée', 'Idées'], ['Terminé', 'Terminés'], ['tous', 'Tous']];
+let filtreProjets = 'En cours';
+let projetsParId = new Map();
 
 const carteProjet = (p) => `
   <article class="carte projet" style="--c:${esc(p.hex)}">
     <header class="projet-tete">
       ${pastille(p)}
       <div class="projet-titre"><h3>${esc(p.nom)}</h3>${p.categorie ? `<span class="categorie">${esc(p.categorie)}</span>` : ''}</div>
-      ${p.url ? `<a class="lien-notion" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer" aria-label="Ouvrir ${esc(p.nom)} dans Notion">${ico('link')}</a>` : ''}
+      <button class="lien-notion" type="button" data-projet="${esc(p.id)}" aria-label="Modifier ${esc(p.nom)}">${ico('edit')}</button>
     </header>
+    ${p.statut && p.statut !== 'En cours' ? `<span class="puce statut">${esc(p.statut)}</span>` : ''}
     ${p.prochaineEtape ? `<p class="etape-courte"><b>Prochaine étape</b> ${esc(p.prochaineEtape)}</p>` : ''}
+    ${p.resume ? `<p class="resume">${esc(p.resume)}</p>` : ''}
     ${zoneObjectif(p)}
     <div class="puces">
       ${p.type === 'Activité' && !p.tachesOuvertes ? '' : `<span class="puce">${p.tachesOuvertes} tâche${p.tachesOuvertes > 1 ? 's' : ''} à faire</span>`}
@@ -405,70 +485,96 @@ const carteProjet = (p) => `
   </article>`;
 
 async function chargerProjets() {
-  const liste = await api('/api/projets');
-  const projets = liste.filter((p) => p.type !== 'Activité');
-  const activites = liste.filter((p) => p.type === 'Activité');
-  $('#projets-contenu').innerHTML = liste.length
+  const liste = await api('/api/projets?tous=1');
+  projetsParId = new Map(liste.map((p) => [p.id, p]));
+  const statut = (p) => p.statut || 'En cours';
+  $('#filtres-projets').innerHTML = STATUTS_FILTRES.map(([cle, libelle]) => {
+    const n = cle === 'tous' ? liste.length : liste.filter((p) => statut(p) === cle).length;
+    return `<button type="button" class="filtre" data-filtre="${esc(cle)}" aria-pressed="${filtreProjets === cle}">${esc(libelle)} <span class="compte">${n}</span></button>`;
+  }).join('');
+  const visibles = filtreProjets === 'tous' ? liste : liste.filter((p) => statut(p) === filtreProjets);
+  const projets = visibles.filter((p) => p.type !== 'Activité');
+  const activites = visibles.filter((p) => p.type === 'Activité');
+  $('#projets-contenu').innerHTML = visibles.length
     ? (projets.length ? `<h3 class="sous-titre premier">Projets</h3>${projets.map(carteProjet).join('')}` : '')
-      + (activites.length ? `<h3 class="sous-titre">Activités <span class="sous-note">enveloppes de la semaine</span></h3>${activites.map(carteProjet).join('')}` : '')
-    : '<div class="vide"><p>Aucun projet « En cours » dans Notion.</p></div>';
+      + (activites.length ? `<h3 class="sous-titre${projets.length ? '' : ' premier'}">Activités <span class="sous-note">enveloppes de la semaine</span></h3>${activites.map(carteProjet).join('')}` : '')
+    : `<div class="vide"><p>${filtreProjets === 'tous' ? 'Aucun projet.' : 'Aucun projet ou activité dans cette catégorie.'}</p></div>`;
 }
 
-// Modifier l'objectif / l'enveloppe : le bouton ouvre un petit formulaire à la place de la ligne.
-$('#projets-contenu').addEventListener('click', async (ev) => {
-  const ouvrir = ev.target.closest('[data-objectif]');
-  if (ouvrir) {
-    const zone = ouvrir.closest('.objectif-zone');
-    zone.innerHTML = `<form class="obj-form" data-id="${esc(ouvrir.dataset.objectif)}">
-      <input type="number" min="0" max="3000" step="15" value="${esc(ouvrir.dataset.valeur)}" placeholder="minutes" aria-label="Minutes par semaine" required>
-      <span class="objectif-texte">min / semaine</span>
-      <button class="btn-ajout" type="submit">OK</button>
-      <button class="btn-texte" type="button" data-annuler-objectif>Annuler</button></form>`;
-    zone.querySelector('input').focus();
-  } else if (ev.target.closest('[data-annuler-objectif]')) {
-    chargerProjets().catch((e) => toast(e.message));
-  }
-});
-$('#projets-contenu').addEventListener('submit', async (ev) => {
-  const form = ev.target.closest('.obj-form');
-  if (!form) return;
-  ev.preventDefault();
-  const minutes = Number(form.querySelector('input').value);
-  try {
-    await api(`/api/projets/${encodeURIComponent(form.dataset.id)}`, { method: 'PATCH', body: { objectifHebdo: minutes > 0 ? minutes : null } });
-    toast(minutes > 0 ? 'Objectif enregistré' : 'Objectif retiré');
-    await chargerProjets();
-  } catch (e) {
-    toast(e.message);
-  }
-});
+// Créer ou modifier un projet ou une activité : tous les champs, dont le logo (un lien vers une image) et la couleur.
+async function feuilleProjet(p, typeNeuf = 'Projet') {
+  const o = await options();
+  const creation = !p;
+  const v = p || { type: typeNeuf, statut: 'En cours', couleur: typeNeuf === 'Activité' ? 'Turquoise' : 'Bleu' };
+  const avant = creation ? {} : {
+    nom: p.nom, type: p.type, statut: p.statut, categorie: p.categorie || null, priorite: p.priorite || null, echeance: p.echeance || null,
+    prochaineEtape: p.prochaineEtape || '', objectifHebdo: p.objectifHebdo ?? null, couleur: p.couleur || null, icone: p.icone || '', logo: p.logoLien || null, resume: p.resume || '',
+  };
+  const categories = [...new Set([...o.categories, ...(v.categorie ? [v.categorie] : [])])];
+  const activite = v.type === 'Activité';
+  feuille({
+    titre: creation ? (typeNeuf === 'Activité' ? 'Nouvelle activité' : 'Nouveau projet') : activite ? 'Modifier l’activité' : 'Modifier le projet',
+    libelle: creation ? 'Créer' : 'Enregistrer',
+    valeurs: { ...v, categorie: v.categorie || '', priorite: v.priorite || '', couleur: v.couleur || '', logo: v.logoLien || '' },
+    champs: [
+      { nom: 'nom', label: 'Nom', type: 'text', maxlength: 100, requis: true },
+      { nom: 'type', label: 'Type', type: 'select', options: o.types.map((t) => ({ v: t, l: t === 'Activité' ? 'Activité (lire, réviser…)' : 'Projet' })) },
+      { nom: 'statut', label: 'Statut', type: 'select', options: choixListe(o.statuts) },
+      { nom: 'objectifHebdo', label: 'Objectif de la semaine, en minutes (enveloppe d’une activité)', type: 'number', min: 0, max: 3000, step: 15, placeholder: 'ex. 120', aide: '15 à 3000 minutes ; vide : pas d’objectif.' },
+      { nom: 'prochaineEtape', label: 'Prochaine étape', type: 'text', maxlength: 500 },
+      { nom: 'echeance', label: 'Échéance', type: 'date' },
+      { nom: 'priorite', label: 'Priorité', type: 'select', options: choixListe(o.priorites, 'Aucune') },
+      { nom: 'categorie', label: 'Catégorie', type: 'select', options: choixListe(categories, 'Aucune') },
+      { nom: 'couleur', label: 'Couleur', type: 'select', options: choixListe(o.couleurs, 'Aucune') },
+      { nom: 'icone', label: 'Initiales ou emoji (si pas de logo)', type: 'text', maxlength: 8, placeholder: 'ex. 42' },
+      { nom: 'logo', label: 'Logo : lien vers une image', type: 'url', placeholder: 'https://…/logo.png', aide: p?.logo && !p.logoLien ? 'Un logo est déjà enregistré dans Notion : colle un lien pour le remplacer.' : 'Vide : pas de logo (ou celui qui est déjà dans Notion).' },
+      { nom: 'resume', label: 'Résumé', type: 'textarea' },
+    ],
+    enregistrer: async (val) => {
+      const charge = { ...val, categorie: val.categorie || null, priorite: val.priorite || null, echeance: val.echeance || null, couleur: val.couleur || null, logo: val.logo || null };
+      if (creation) await api('/api/projets', { method: 'POST', body: charge });
+      else {
+        const diff = changements(avant, charge);
+        if (!Object.keys(diff).length) return;
+        await api(`/api/projets/${encodeURIComponent(p.id)}`, { method: 'PATCH', body: diff });
+      }
+      toast(creation ? 'Ajouté' : 'Modifications enregistrées');
+      await chargerProjets();
+    },
+    supprimer: creation ? null : async () => {
+      await api(`/api/projets/${encodeURIComponent(p.id)}`, { method: 'DELETE' });
+      toast('Supprimé (corbeille de Notion)');
+      await chargerProjets();
+    },
+    confirmation: p && `Supprimer « ${p.nom} » ? Il part à la corbeille de Notion (récupérable) ; ses tâches et ses séances restent.`,
+  });
+}
 
-$('#ajouter-activite').addEventListener('click', () => {
-  const form = $('#form-activite');
-  form.hidden = !form.hidden;
-  if (!form.hidden) $('#a-nom').focus();
+$('#projets-contenu').addEventListener('click', (ev) => {
+  const bouton = ev.target.closest('[data-projet]');
+  if (bouton) feuilleProjet(projetsParId.get(bouton.dataset.projet)).catch((e) => toast(e.message));
 });
-$('#form-activite').addEventListener('submit', async (ev) => {
-  ev.preventDefault();
-  const msg = $('#form-activite .message');
-  msg.textContent = '';
-  const bouton = ev.submitter;
-  bouton.disabled = true;
-  try {
-    await api('/api/activites', { method: 'POST', body: { nom: $('#a-nom').value, objectifHebdo: $('#a-enveloppe').value || null, couleur: $('#a-couleur').value } });
-    $('#form-activite').reset();
-    $('#form-activite').hidden = true;
-    toast('Activité ajoutée');
-    await chargerProjets();
-  } catch (err) {
-    msg.textContent = err.message;
-  }
-  bouton.disabled = false;
+$('#filtres-projets').addEventListener('click', (ev) => {
+  const f = ev.target.closest('[data-filtre]');
+  if (!f) return;
+  filtreProjets = f.dataset.filtre;
+  chargerProjets().catch((e) => toast(e.message));
+});
+$('#nouveau-projet').addEventListener('click', () => {
+  // Un petit choix : projet ou activité (une activité a une enveloppe de temps, sans échéance ni fin)
+  feuille({
+    titre: 'Créer…', libelle: 'Continuer',
+    champs: [{ nom: 'genre', label: 'Quoi ?', type: 'select', options: [{ v: 'Projet', l: 'Un projet (avec une fin : Gorgée, un examen…)' }, { v: 'Activité', l: 'Une activité (qui se répète : lire, réviser…)' }] }],
+    enregistrer: async (val) => { setTimeout(() => feuilleProjet(null, val.genre).catch((e) => toast(e.message)), 50); },
+  });
 });
 
 // --- Écran « Tâches » ------------------------------------------------------------------------------------------
+let tachesParId = new Map();
+let faitesVisibles = false;
 async function chargerTaches() {
   const liste = await api('/api/taches');
+  tachesParId = new Map(liste.map((t) => [t.id, t]));
   const groupes = new Map(); // clé → { projet, taches }
   for (const t of liste) {
     const cle = t.projet ? t.projet.id : 'aucun';
@@ -482,17 +588,84 @@ async function chargerTaches() {
       <ul class="liste">${g.taches.map((t) => `
         <li class="ligne ${t.projetActif ? '' : 'en-sommeil'}">
           <button class="rond" type="button" data-fait="${esc(t.id)}" aria-label="Terminer : ${esc(t.titre)}">${ico('check')}</button>
-          <div class="ligne-texte"><span class="ligne-titre">${esc(t.titre)}</span>
-            <span class="puces"><span class="puce">${duree(t.duree)}</span>${puceEcheance(t.echeance)}${t.priorite ? `<span class="puce prio-${esc(t.priorite)}">${esc(t.priorite)}</span>` : ''}${t.projetActif ? '' : '<span class="puce">projet en pause</span>'}</span></div>
+          <button class="ligne-texte ligne-btn" type="button" data-editer="${esc(t.id)}" aria-label="Modifier : ${esc(t.titre)}"><span class="ligne-titre">${esc(t.titre)}</span>
+            <span class="puces"><span class="puce">${duree(t.duree)}</span>${puceEcheance(t.echeance)}${t.priorite ? `<span class="puce prio-${esc(t.priorite)}">${esc(t.priorite)}</span>` : ''}${t.projetActif ? '' : '<span class="puce">projet en pause</span>'}${t.notes ? `<span class="puce">${ico('edit')}notes</span>` : ''}</span></button>
           ${t.projetActif ? `<button class="lancer" type="button" data-lancer="${esc(t.id)}" aria-label="Lancer le chrono : ${esc(t.titre)}">${ico('play')}</button>` : ''}
-          ${t.url ? `<a class="lien-notion" href="${esc(t.url)}" target="_blank" rel="noopener noreferrer" aria-label="Ouvrir dans Notion">${ico('link')}</a>` : ''}
         </li>`).join('')}</ul>
     </section>`).join('') : '<div class="vide"><p>Aucune tâche à faire. Ajoute-en avec le bouton « Ajouter ».</p></div>';
+  if (faitesVisibles) await chargerFaites();
+}
+
+// Les tâches terminées (les plus récentes d'abord) : on peut les rétablir, les corriger ou les supprimer.
+async function chargerFaites() {
+  const liste = await api('/api/taches?statut=faites');
+  for (const t of liste) tachesParId.set(t.id, t);
+  $('#taches-faites').innerHTML = liste.length ? `<h3 class="sous-titre">Terminées récemment</h3><ul class="liste">${liste.map((t) => `
+    <li class="ligne fait" style="--c:${esc(t.projet ? t.projet.hex : '#8b93ff')}">
+      <button class="rond rempli" type="button" data-retablir="${esc(t.id)}" aria-label="Rétablir : ${esc(t.titre)}">${ico('check')}</button>
+      <button class="ligne-texte ligne-btn" type="button" data-editer="${esc(t.id)}" aria-label="Modifier : ${esc(t.titre)}"><span class="ligne-titre">${esc(t.titre)}</span>
+        <span class="puces">${t.projet ? `<span class="puce">${esc(t.projet.nom)}</span>` : '<span class="puce">Hors projet</span>'}${t.tempsPasse ? `<span class="puce">${ico('timer')}${duree(t.tempsPasse)}</span>` : ''}</span></button>
+    </li>`).join('')}</ul>` : '<div class="vide"><p>Aucune tâche terminée.</p></div>';
+}
+$('#voir-faites').addEventListener('click', async () => {
+  faitesVisibles = !faitesVisibles;
+  $('#voir-faites').textContent = faitesVisibles ? 'Masquer les tâches terminées' : 'Voir les tâches terminées';
+  if (!faitesVisibles) return void ($('#taches-faites').innerHTML = '');
+  try { await chargerFaites(); } catch (e) { toast(e.message); }
+});
+$('#taches-faites').addEventListener('click', async (ev) => {
+  const edit = ev.target.closest('[data-editer]');
+  const retablir = ev.target.closest('[data-retablir]');
+  if (edit) return feuilleTache(tachesParId.get(edit.dataset.editer)).catch((e) => toast(e.message));
+  if (!retablir) return;
+  try {
+    await api(`/api/taches/${encodeURIComponent(retablir.dataset.retablir)}`, { method: 'PATCH', body: { fait: false } });
+    toast('Tâche rétablie');
+    await chargerTaches();
+  } catch (e) {
+    toast(e.message);
+  }
+});
+
+// Modifier une tâche : titre, projet, durée, priorité, échéance, notes, terminée ou non.
+async function feuilleTache(t) {
+  if (!t) return;
+  const projets = await api('/api/projets?tous=1');
+  const choixProjets = projets.filter((p) => p.statut === 'En cours' || p.id === t.projetId);
+  const avant = { titre: t.titre, projetId: t.projetId || null, duree: t.duree, priorite: t.priorite || null, echeance: t.echeance || null, notes: t.notes || '', fait: t.statut === 'Fait' };
+  feuille({
+    titre: 'Modifier la tâche',
+    valeurs: { ...t, projetId: t.projetId || '', priorite: t.priorite || '', fait: t.statut === 'Fait' },
+    champs: [
+      { nom: 'titre', label: 'Tâche', type: 'text', maxlength: 200, requis: true },
+      { nom: 'projetId', label: 'Projet', type: 'select', options: [{ v: '', l: 'Hors projet (to-do simple)' }, ...choixProjets.map((p) => ({ v: p.id, l: p.nom }))] },
+      { nom: 'duree', label: 'Durée estimée (min)', type: 'number', min: 5, max: 240, step: 5, requis: true },
+      { nom: 'priorite', label: 'Priorité', type: 'select', options: choixListe(['Haute', 'Moyenne', 'Basse'], 'Aucune') },
+      { nom: 'echeance', label: 'Échéance', type: 'date' },
+      { nom: 'notes', label: 'Notes', type: 'textarea' },
+      { nom: 'fait', label: 'Tâche terminée', type: 'checkbox' },
+    ],
+    enregistrer: async (val) => {
+      const diff = changements(avant, { ...val, projetId: val.projetId || null, priorite: val.priorite || null, echeance: val.echeance || null });
+      if (!Object.keys(diff).length) return;
+      await api(`/api/taches/${encodeURIComponent(t.id)}`, { method: 'PATCH', body: diff });
+      toast('Tâche modifiée');
+      await chargerTaches();
+    },
+    supprimer: async () => {
+      await api(`/api/taches/${encodeURIComponent(t.id)}`, { method: 'DELETE' });
+      toast('Tâche supprimée (corbeille de Notion)');
+      await chargerTaches();
+    },
+    confirmation: `Supprimer la tâche « ${t.titre} » ? Elle part à la corbeille de Notion (récupérable).`,
+  });
 }
 
 $('#taches-contenu').addEventListener('click', async (ev) => {
   const fait = ev.target.closest('[data-fait]');
   const lancer = ev.target.closest('[data-lancer]');
+  const edit = ev.target.closest('[data-editer]');
+  if (edit) return feuilleTache(tachesParId.get(edit.dataset.editer)).catch((e) => toast(e.message));
   if (lancer) return lancerChrono(lancer.dataset.lancer);
   if (!fait) return;
   const id = fait.dataset.fait;
@@ -666,6 +839,144 @@ $('#form-decoupe').addEventListener('submit', async (ev) => {
   bouton.disabled = false;
 });
 
+// --- Écran « Séances » (historique, séance oubliée, corrections) ------------------------------------------------------
+let seancesParId = new Map();
+const jourLong = (iso) => new Date(iso.slice(0, 10) + 'T12:00:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+const sansDuree = (titre) => String(titre || '').replace(/\s·\s[^·]+$/, ''); // le titre d'une séance se termine par « · 30 min »
+
+async function chargerSeances() {
+  const { seances } = await api('/api/seances?jours=60');
+  seancesParId = new Map(seances.map((s) => [s.id, s]));
+  const jours = new Map();
+  for (const s of seances) jours.set(s.jour, [...(jours.get(s.jour) || []), s]);
+  $('#seances-contenu').innerHTML = jours.size ? [...jours].map(([jour, liste]) => `
+    <section class="groupe">
+      <h3 class="groupe-titre">${esc(jourLong(jour))}<span class="compte">${duree(liste.reduce((somme, s) => somme + s.duree, 0))}</span></h3>
+      <ul class="liste">${liste.map((s) => `
+        <li class="ligne" style="--c:${esc(s.projetHex || '#8b93ff')}">
+          <button class="ligne-texte ligne-btn" type="button" data-seance="${esc(s.id)}" aria-label="Modifier la séance : ${esc(sansDuree(s.titre))}"><span class="ligne-titre">${esc(sansDuree(s.titre))}</span>
+            <span class="puces"><span class="puce">${ico('timer')}${duree(s.duree)}</span>${s.projetNom ? `<span class="puce">${esc(s.projetNom)}</span>` : ''}${s.origine && s.origine !== 'Chrono' ? `<span class="puce">${esc(s.origine.toLowerCase())}</span>` : ''}</span>
+            ${s.bilan ? `<span class="bilan-court">${esc(s.bilan)}</span>` : ''}</button>
+        </li>`).join('')}</ul>
+    </section>`).join('') : '<div class="vide"><p>Aucune séance ces 60 derniers jours.</p></div>';
+}
+$('#seances-contenu').addEventListener('click', (ev) => {
+  const b = ev.target.closest('[data-seance]');
+  if (b) feuilleSeance(seancesParId.get(b.dataset.seance));
+});
+
+// Corriger ou supprimer une séance : le temps cumulé du projet et de la tâche suit.
+function feuilleSeance(s) {
+  if (!s) return;
+  feuille({
+    titre: 'Modifier la séance',
+    valeurs: s,
+    champs: [
+      { nom: 'jour', label: 'Jour', type: 'date', max: jourLocal(), requis: true, aide: `${sansDuree(s.titre)}${s.projetNom ? ` · ${s.projetNom}` : ''}` },
+      { nom: 'duree', label: 'Temps travaillé (min)', type: 'number', min: 1, max: 600, requis: true },
+      { nom: 'bilan', label: 'Bilan', type: 'textarea' },
+    ],
+    enregistrer: async (val) => {
+      const diff = changements({ jour: s.jour, duree: s.duree, bilan: s.bilan }, val);
+      if (!Object.keys(diff).length) return;
+      await api(`/api/seances/${encodeURIComponent(s.id)}`, { method: 'PATCH', body: diff });
+      toast('Séance corrigée');
+      await chargerSeances();
+    },
+    supprimer: async () => {
+      await api(`/api/seances/${encodeURIComponent(s.id)}`, { method: 'DELETE' });
+      toast('Séance supprimée');
+      await chargerSeances();
+    },
+    confirmation: `Supprimer cette séance de ${duree(s.duree)} ? Ce temps sera aussi retiré du projet et de la tâche.`,
+  });
+}
+
+// Séance oubliée : on choisit le projet (et la tâche), le jour, la durée.
+$('#ajouter-seance').addEventListener('click', async () => {
+  try {
+    const [projets, taches] = await Promise.all([api('/api/projets'), api('/api/taches')]);
+    const optionsTaches = (projetId) => [{ v: '', l: 'Aucune tâche en particulier' }, ...taches.filter((t) => (t.projetId || '') === projetId).map((t) => ({ v: t.id, l: t.titre }))];
+    feuille({
+      titre: 'Séance oubliée', libelle: 'Ajouter',
+      valeurs: { projetId: '', tacheId: '', jour: jourLocal(), duree: 30 },
+      champs: [
+        { nom: 'projetId', label: 'Projet ou activité', type: 'select', options: [{ v: '', l: 'Hors projet' }, ...projets.map((p) => ({ v: p.id, l: p.nom }))] },
+        { nom: 'tacheId', label: 'Tâche', type: 'select', options: optionsTaches('') },
+        { nom: 'jour', label: 'Jour', type: 'date', max: jourLocal(), requis: true },
+        { nom: 'duree', label: 'Temps travaillé (min)', type: 'number', min: 1, max: 600, requis: true },
+        { nom: 'bilan', label: 'Bilan (facultatif)', type: 'textarea' },
+      ],
+      enregistrer: async (val) => {
+        const r = await api('/api/seances', { method: 'POST', body: { projetId: val.projetId || null, tacheId: val.tacheId || null, jour: val.jour, duree: val.duree, bilan: val.bilan } });
+        toast(r.enAttente ? 'Séance gardée : Notion est injoignable, elle partira plus tard' : 'Séance ajoutée');
+        await chargerSeances();
+      },
+    });
+    $('#f-projetId').addEventListener('change', (ev) => {
+      $('#f-tacheId').innerHTML = optionsTaches(ev.target.value).map((o) => `<option value="${esc(o.v)}">${esc(o.l)}</option>`).join('');
+    });
+  } catch (e) {
+    toast(e.message);
+  }
+});
+
+// --- Écran « Musique » (la bibliothèque de la radio) ------------------------------------------------------------------
+let liensParId = new Map();
+const hoteLien = (lien) => { try { return new URL(lien).hostname.replace(/^www\./, ''); } catch { return lien; } };
+async function chargerBibliotheque() {
+  const r = await api('/api/musique?tout=1');
+  liensParId = new Map(r.lignes.map((l) => [l.id, l]));
+  $('#bibliotheque-contenu').innerHTML = (r.message ? `<p class="avertissement">${esc(r.message)}</p>` : '')
+    + (r.lignes.length ? `<ul class="liste">${r.lignes.map((l) => `
+      <li class="ligne ${l.desactive ? 'en-sommeil' : ''}" style="--c:var(--turquoise)">
+        <button class="ligne-texte ligne-btn" type="button" data-lien="${esc(l.id)}" aria-label="Modifier : ${esc(l.titre)}"><span class="ligne-titre">${esc(l.titre)}</span>
+          <span class="puces"><span class="puce">${esc(hoteLien(l.lien))}</span>${l.valide ? '' : '<span class="puce retard">lien non reconnu</span>'}${l.desactive ? '<span class="puce">désactivé</span>' : ''}</span></button>
+        <button class="rond ${l.desactive ? '' : 'rempli'}" type="button" data-bascule="${esc(l.id)}" aria-label="${l.desactive ? 'Activer' : 'Désactiver'} : ${esc(l.titre)}" aria-pressed="${!l.desactive}">${ico('check')}</button>
+      </li>`).join('')}</ul>` : '<div class="vide"><p>Aucun lien. Ajoute une playlist ou une vidéo YouTube.</p></div>')
+    + '<p class="note gauche">La radio pioche au hasard parmi les liens cochés. Un lien décoché est gardé mais ignoré.</p>';
+}
+$('#bibliotheque-contenu').addEventListener('click', async (ev) => {
+  const bascule = ev.target.closest('[data-bascule]');
+  const edit = ev.target.closest('[data-lien]');
+  if (bascule) {
+    const l = liensParId.get(bascule.dataset.bascule);
+    try {
+      await api(`/api/musique/${encodeURIComponent(l.id)}`, { method: 'PATCH', body: { desactive: !l.desactive } });
+      await chargerBibliotheque();
+    } catch (e) { toast(e.message); }
+  } else if (edit) feuilleLien(liensParId.get(edit.dataset.lien));
+});
+function feuilleLien(l) {
+  const creation = !l;
+  feuille({
+    titre: creation ? 'Ajouter un lien' : 'Modifier le lien', libelle: creation ? 'Ajouter' : 'Enregistrer',
+    valeurs: l || {},
+    champs: [
+      { nom: 'titre', label: 'Titre', type: 'text', maxlength: 200, placeholder: 'ex. Mac Miller 1 hour chill mix' },
+      { nom: 'lien', label: 'Lien YouTube (vidéo ou playlist)', type: 'url', placeholder: 'https://www.youtube.com/watch?v=…', requis: true },
+      ...(creation ? [] : [{ nom: 'desactive', label: 'Désactivé (la radio l’ignore)', type: 'checkbox' }]),
+    ],
+    enregistrer: async (val) => {
+      if (creation) await api('/api/musique', { method: 'POST', body: { titre: val.titre, lien: val.lien } });
+      else {
+        const diff = changements({ titre: l.titre, lien: l.lien, desactive: l.desactive }, val);
+        if (!Object.keys(diff).length) return;
+        await api(`/api/musique/${encodeURIComponent(l.id)}`, { method: 'PATCH', body: diff });
+      }
+      toast(creation ? 'Lien ajouté' : 'Lien modifié');
+      await chargerBibliotheque();
+    },
+    supprimer: creation ? null : async () => {
+      await api(`/api/musique/${encodeURIComponent(l.id)}`, { method: 'DELETE' });
+      toast('Lien supprimé');
+      await chargerBibliotheque();
+    },
+    confirmation: l && `Supprimer « ${l.titre} » de la bibliothèque ?`,
+  });
+}
+$('#ajouter-lien').addEventListener('click', () => feuilleLien(null));
+
 // --- Écran « Réglages » ---------------------------------------------------------------------------------------------
 async function chargerReglages() {
   const [e, s] = await Promise.all([api('/api/etat'), api('/api/synchro')]);
@@ -680,7 +991,11 @@ async function chargerReglages() {
     <div class="carte">
       <h3>Musique</h3>
       <label class="case"><input id="r-musique" type="checkbox"${musiqueActive() ? ' checked' : ''}> Musique pendant le chrono</label>
-      <p class="note gauche">Les mix viennent de la base « Musique » de Notion : ajoute un lien YouTube, ou coche « Désactivé » pour en écarter un.</p>
+      <a class="lien-carte" href="#bibliotheque">Gérer la bibliothèque de musique${ico('chevron')}</a>
+    </div>
+    <div class="carte">
+      <h3>Séances</h3>
+      <a class="lien-carte" href="#seances">Historique, séance oubliée, corrections${ico('chevron')}</a>
     </div>`;
   $('#r-musique').addEventListener('change', (ev) => {
     try { localStorage.setItem('bosse-musique', ev.target.checked ? 'oui' : 'non'); } catch {}
@@ -698,7 +1013,7 @@ async function chargerReglages() {
 }
 
 // --- Navigation ----------------------------------------------------------------------------------------------------------
-const ECRANS = { maintenant: chargerMaintenant, chrono: chargerChrono, bilan: chargerBilan, projets: chargerProjets, taches: chargerTaches, roue: chargerRoue, reglages: chargerReglages };
+const ECRANS = { maintenant: chargerMaintenant, chrono: chargerChrono, bilan: chargerBilan, projets: chargerProjets, taches: chargerTaches, roue: chargerRoue, seances: chargerSeances, bibliotheque: chargerBibliotheque, reglages: chargerReglages };
 const SANS_NAV = ['connexion', 'chrono', 'bilan'];
 
 async function afficher() {
@@ -708,7 +1023,8 @@ async function afficher() {
   document.querySelectorAll('.ecran').forEach((s) => { s.hidden = s.id !== ecran; });
   if (ecran !== 'chrono') Radio.arreter();
   $('#nav').hidden = SANS_NAV.includes(ecran);
-  document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('actif', a.getAttribute('href') === '#' + ecran));
+  const onglet = { seances: 'reglages', bibliotheque: 'reglages' }[ecran] || ecran; // ces écrans se rangent sous « Réglages »
+  document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('actif', a.getAttribute('href') === '#' + onglet));
   if (ecran === 'connexion') return $('#mdp').focus();
   try {
     // Un chrono est en cours (ou en attente de bilan) : on y retourne, d'où qu'on vienne.

@@ -39,8 +39,8 @@ Les bases suivantes existent déjà dans la page « Projet » et sont retrouvée
 |---|---|
 | **Mes projets** (existante ; propriété `Type` Projet / Activité ajoutée à l'étape 6) | lit les projets et activités « En cours » ; écrit `Temps cumulé (min)`, `Dernière activité`, `Prochaine étape` (si tu l'as changée), `Statut` → Terminé (si tu coches « Projet terminé »), `Objectif de temps hebdo (min)` (si tu le modifies dans l'appli) ; crée une ligne quand tu ajoutes une activité |
 | **Tâches** | lit les tâches ; écrit `Temps passé (min)`, `Dernière fois`, `Statut` (Fait / À faire) ; crée les tâches ajoutées dans l'appli |
-| **Sessions de travail** | une ligne par séance |
-| **Musique** | lit les liens YouTube (jamais modifiée) |
+| **Sessions de travail** | une ligne par séance ; corrigée ou supprimée quand tu le fais dans l'appli (le temps cumulé suit) |
+| **Musique** | lit les liens YouTube ; les ajoute, les renomme, les désactive ou les supprime quand tu le fais dans l'appli |
 
 Ne renomme pas ces bases (sinon : `NOTION_BASE_TACHES`, `NOTION_BASE_SESSIONS`, `NOTION_BASE_MUSIQUE` dans le YAML). Sans `NOTION_TOKEN` : mode démo (données fictives, rien n'est lu ni écrit).
 
@@ -117,6 +117,9 @@ Test depuis le téléphone **en 4G (Wi-Fi coupé)** : https://teranga-nas.synolo
 
 ### Android (avec Chrome)
 Menu **⋮** → **Installer l'application**.
+
+### La musique quand l'écran s'éteint
+Le son d'un lecteur YouTube intégré **s'arrête quand le téléphone se verrouille** ou que l'appli passe en arrière-plan : c'est une règle d'iOS et de YouTube, que l'appli ne peut pas contourner. Pendant un chrono, l'appli garde l'écran allumé (si le téléphone le permet) ; si le son a été coupé par la mise en veille, il **repart tout seul au retour dans l'appli**.
 
 ### À vérifier une fois sur ton iPhone (je n'ai pas pu le tester)
 - **Musique** : au lancement du chrono, la musique doit démarrer. Safari peut la bloquer : l'appli affiche alors « touche ▶ pour lancer la musique » ; un appui suffit. Si elle ne démarre jamais, dis-le moi.

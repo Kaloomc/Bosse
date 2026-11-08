@@ -11,7 +11,11 @@
 //     Objectif de temps hebdo (min) si tu le modifies dans l'appli ; une nouvelle ligne quand tu ajoutes une activité
 //     (avec la propriété « Type », ajoutée à la base si elle manque) ;
 //   - « Tâches » : Temps passé (min), Dernière fois, Statut (Fait / À faire), et les tâches créées dans l'appli.
-// La base « Musique » (liens YouTube) est seulement lue.
+//   - « Sessions de travail » : aussi modifiées et supprimées (séances oubliées, corrections) ; le temps cumulé du projet et de la
+//     tâche est alors ajusté de la différence ;
+//   - « Musique » : liens ajoutés, modifiés, désactivés ou supprimés depuis l'appli ;
+//   - tout champ d'un projet, d'une activité ou d'une tâche qu'on modifie dans l'appli (nom, statut, couleur, logo par lien…).
+// Les suppressions mettent la page à la corbeille de Notion (récupérable).
 const { hexDe, duree: dureeTexte } = require('./projets');
 const { aujourdhui, debutSemaine, ajouterJours } = require('./temps');
 
@@ -109,7 +113,8 @@ function lireProjet(page) {
     priorite: choix(p['Priorité']), couleur, hex: hexDe(couleur), echeance: jour(p['Échéance']),
     prochaineEtape: texte(p['Prochaine étape']), derniereActivite: jour(p['Dernière activité']),
     tempsCumule: nombre(p['Temps cumulé (min)']) ?? 0, objectifHebdo: nombre(p['Objectif de temps hebdo (min)']),
-    logo: (p['Logo']?.files?.length ?? 0) > 0, icone: texte(p['Icône']), url: page.url,
+    logo: (p['Logo']?.files?.length ?? 0) > 0, logoLien: p['Logo']?.files?.[0]?.external?.url ?? '', icone: texte(p['Icône']),
+    resume: texte(p['Objectif / résumé']), url: page.url,
   };
 }
 
@@ -129,7 +134,7 @@ function lireSession(page) {
   if (!debut) return null;
   return {
     id: page.id, debut, duree: nombre(p['Durée (min)']) ?? 0, tacheId: p['Tâche']?.relation?.[0]?.id ?? null,
-    projetId: p['Projet']?.relation?.[0]?.id ?? null, titre: texte(p['Titre']), bilan: texte(p['Bilan']),
+    projetId: p['Projet']?.relation?.[0]?.id ?? null, titre: texte(p['Titre']), bilan: texte(p['Bilan']), origine: choix(p['Origine']),
   };
 }
 
@@ -173,7 +178,7 @@ async function creerSession(s) {
       ...(s.projetId && { Projet: relation(s.projetId) }),
       Bilan: riche(s.bilan),
       'Prochaine étape': riche(s.prochaineEtape),
-      Origine: { select: { name: s.origine === 'Roue' ? 'Roue' : 'Chrono' } }, // « Roue » : projet tiré au sort
+      Origine: { select: { name: ['Roue', 'Ajout manuel'].includes(s.origine) ? s.origine : 'Chrono' } }, // « Roue » : projet tiré au sort ; « Ajout manuel » : séance oubliée
     },
   });
   return page.id;
@@ -183,7 +188,9 @@ async function creerSession(s) {
 async function majProjet(id, { duree, jour: j, prochaineEtape, termine }) {
   const page = await api('GET', `/pages/${id}`);
   const actuel = nombre(page.properties?.['Temps cumulé (min)']) ?? 0;
-  const properties = { 'Temps cumulé (min)': { number: actuel + duree }, 'Dernière activité': { date: { start: j } } };
+  const properties = { 'Temps cumulé (min)': { number: actuel + duree } };
+  const derniere = jour(page.properties?.['Dernière activité']);
+  if (!derniere || j > derniere) properties['Dernière activité'] = { date: { start: j } }; // une séance ajoutée après coup ne fait pas reculer la date
   if (prochaineEtape) properties['Prochaine étape'] = riche(prochaineEtape);
   if (termine) properties['Statut'] = { select: { name: 'Terminé' } };
   await api('PATCH', `/pages/${id}`, { properties });
@@ -192,7 +199,9 @@ async function majProjet(id, { duree, jour: j, prochaineEtape, termine }) {
 async function majTache(id, { duree, jour: j, fait }) {
   const page = await api('GET', `/pages/${id}`);
   const actuel = nombre(page.properties?.['Temps passé (min)']) ?? 0;
-  const properties = { 'Temps passé (min)': { number: actuel + duree }, 'Dernière fois': { date: { start: j } } };
+  const properties = { 'Temps passé (min)': { number: actuel + duree } };
+  const derniere = jour(page.properties?.['Dernière fois']);
+  if (!derniere || j > derniere) properties['Dernière fois'] = { date: { start: j } };
   if (fait) properties['Statut'] = { select: { name: 'Fait' } };
   await api('PATCH', `/pages/${id}`, { properties });
 }
@@ -253,6 +262,117 @@ async function statutTache(id, fait) {
   await api('PATCH', `/pages/${id}`, { properties: { Statut: { select: { name: fait ? 'Fait' : 'À faire' } } } });
 }
 
+// --- Modifier et supprimer (tâches, projets, séances, musique) ------------------------------------
+// Chaque champ modifiable a sa correspondance dans Notion ; un champ absent de ces tables n'est jamais écrit.
+const titre = (v) => ({ title: [{ text: { content: String(v ?? '').slice(0, 200) } }] });
+const selection = (v) => ({ select: v ? { name: v } : null });
+const date = (v) => ({ date: v ? { start: v } : null });
+const CHAMPS_TACHE = {
+  titre: (v) => ['Tâche', titre(v)], projetId: (v) => ['Projet', relation(v)], duree: (v) => ['Durée estimée (min)', { number: v }],
+  priorite: (v) => ['Priorité', selection(v)], echeance: (v) => ['Échéance', date(v)], notes: (v) => ['Notes', riche(v)],
+  statut: (v) => ['Statut', { select: { name: v } }],
+};
+const CHAMPS_PROJET = {
+  nom: (v) => ['Nom', titre(v)], type: (v) => ['Type', selection(v)], statut: (v) => ['Statut', selection(v)], categorie: (v) => ['Catégorie', selection(v)],
+  priorite: (v) => ['Priorité', selection(v)], echeance: (v) => ['Échéance', date(v)], prochaineEtape: (v) => ['Prochaine étape', riche(v)],
+  objectifHebdo: (v) => ['Objectif de temps hebdo (min)', { number: v ?? null }], couleur: (v) => ['Couleur', selection(v)], icone: (v) => ['Icône', riche(v)],
+  resume: (v) => ['Objectif / résumé', riche(v)],
+  logo: (v) => ['Logo', { files: v ? [{ type: 'external', name: 'logo', external: { url: v } }] : [] }], // un lien vers une image
+};
+const proprietes = (table, champs) => Object.fromEntries(Object.entries(champs).filter(([k]) => table[k]).map(([k, v]) => table[k](v)));
+
+// Modifier une tâche : seuls les champs donnés sont écrits.
+async function modifierTache(id, champs) {
+  const page = await api('PATCH', `/pages/${id}`, { properties: proprietes(CHAMPS_TACHE, champs) });
+  return lireTache(page);
+}
+
+// Nouveau projet ou nouvelle activité (type Projet / Activité) avec les champs donnés.
+async function creerProjet({ nom, type = 'Projet', ...champs }) {
+  if (type === 'Activité') await assurerType();
+  const b = await getBases();
+  const page = await api('POST', '/pages', {
+    parent: { database_id: b.projets },
+    properties: proprietes(CHAMPS_PROJET, { nom, type, statut: 'En cours', ...champs }),
+  });
+  return lireProjet(page);
+}
+
+// Modifier un projet ou une activité : seuls les champs donnés sont écrits (changer le type ajoute la propriété « Type » si besoin).
+async function modifierProjet(id, champs) {
+  if (champs.type) await assurerType();
+  const page = await api('PATCH', `/pages/${id}`, { properties: proprietes(CHAMPS_PROJET, champs) });
+  return lireProjet(page);
+}
+
+// Les choix possibles (catégories…) lus dans la base, pour les listes déroulantes.
+async function lireOptions() {
+  const b = await getBases();
+  const base = await api('GET', `/databases/${b.projets}`);
+  const noms = (prop) => (base.properties?.[prop]?.select?.options ?? []).map((o) => o.name);
+  return { categories: noms('Catégorie') };
+}
+
+// Mettre une page à la corbeille de Notion (tâche, projet, séance, lien de musique) : récupérable depuis Notion.
+async function supprimerPage(id) {
+  await api('PATCH', `/pages/${id}`, { archived: true });
+}
+
+// Les tâches terminées (les plus récemment modifiées d'abord), pour les rétablir ou les corriger.
+async function lireTachesFaites(max = 50) {
+  const b = await getBases();
+  const r = await api('POST', `/databases/${b.taches}/query`, { page_size: max, filter: { property: 'Statut', select: { equals: 'Fait' } }, sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }] });
+  return r.results.map(lireTache);
+}
+
+// L'historique des séances depuis un jour donné (les plus récentes d'abord).
+async function lireSeances(depuis) {
+  const b = await getBases();
+  if (!b.sessions) return [];
+  const lignes = await pages(b.sessions, { property: 'Début', date: { on_or_after: depuis } }, [{ property: 'Début', direction: 'descending' }]);
+  return lignes.map(lireSession).filter(Boolean);
+}
+async function lireSeance(id) {
+  return lireSession(await api('GET', `/pages/${id}`));
+}
+
+// Corriger une séance (durée, bilan, date) : { titre, duree, bilan, debut } — seuls les champs donnés sont écrits.
+async function modifierSeance(id, { titre: t, duree, bilan, debut }) {
+  const properties = {};
+  if (t !== undefined) properties.Titre = titre(t);
+  if (duree !== undefined) properties['Durée (min)'] = { number: duree };
+  if (bilan !== undefined) properties.Bilan = riche(bilan);
+  if (debut !== undefined) properties['Début'] = { date: { start: debut } };
+  await api('PATCH', `/pages/${id}`, { properties });
+}
+
+// Ajuster le temps cumulé d'un projet et le temps passé d'une tâche d'une différence (en minutes, + ou −), sans toucher aux dates.
+// Utilisé quand une séance est corrigée ou supprimée : les totaux restent justes. Jamais en dessous de zéro.
+async function ajusterTemps({ projetId, tacheId, delta }) {
+  const ajuster = async (id, propriete) => {
+    const page = await api('GET', `/pages/${id}`);
+    const actuel = nombre(page.properties?.[propriete]) ?? 0;
+    await api('PATCH', `/pages/${id}`, { properties: { [propriete]: { number: Math.max(0, actuel + delta) } } });
+  };
+  if (projetId) await ajuster(projetId, 'Temps cumulé (min)');
+  if (tacheId) await ajuster(tacheId, 'Temps passé (min)');
+}
+
+// La bibliothèque de musique complète (lignes désactivées comprises), et ses modifications.
+async function creerLien({ titre: t, lien }) {
+  const b = await getBases();
+  if (!b.musique) throw new Error(`La base « ${TITRE_MUSIQUE} » n’est pas dans la même page que « Mes projets ».`);
+  const page = await api('POST', '/pages', { parent: { database_id: b.musique }, properties: { Titre: titre(t), 'Lien YouTube': { url: lien } } });
+  return { id: page.id, titre: t, lien, desactive: false };
+}
+async function modifierLien(id, { titre: t, lien, desactive }) {
+  const properties = {};
+  if (t !== undefined) properties.Titre = titre(t);
+  if (lien !== undefined) properties['Lien YouTube'] = { url: lien };
+  if (desactive !== undefined) properties['Désactivé'] = { checkbox: !!desactive };
+  await api('PATCH', `/pages/${id}`, { properties });
+}
+
 // --- Logos ----------------------------------------------------------------------------------
 // Les fichiers de Notion sont servis par des liens qui expirent au bout d'environ une heure : on demande un lien frais
 // à chaque fois (le serveur garde ensuite l'image 30 minutes). Le lien signé n'a pas besoin du jeton : on ne l'envoie pas.
@@ -276,4 +396,5 @@ module.exports = {
   get actif() { return !!token(); },
   lireTout, lireMusique, logo, oublier, lireProjet, lireTache, lireSession,
   creerSession, majProjet, majTache, creerTache, statutTache, creerActivite, majObjectif,
+  modifierTache, creerProjet, modifierProjet, lireOptions, supprimerPage, lireTachesFaites, lireSeances, lireSeance, modifierSeance, ajusterTemps, creerLien, modifierLien,
 };

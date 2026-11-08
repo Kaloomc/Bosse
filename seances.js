@@ -29,14 +29,14 @@ function appliquerSeance(d, seance) {
   const projet = seance.projetId && d.projets.find((p) => p.id === seance.projetId);
   if (projet) {
     projet.tempsCumule = (projet.tempsCumule || 0) + seance.duree;
-    projet.derniereActivite = jour;
+    if (!projet.derniereActivite || jour > projet.derniereActivite) projet.derniereActivite = jour;
     if (seance.prochaineEtape) projet.prochaineEtape = seance.prochaineEtape;
     if (seance.termine && seance.type === 'projet') projet.statut = 'Terminé';
   }
   const tache = seance.tacheId && d.taches.find((t) => t.id === seance.tacheId);
   if (tache) {
     tache.tempsPasse = (tache.tempsPasse || 0) + seance.duree;
-    tache.derniereFois = jour;
+    if (!tache.derniereFois || jour > tache.derniereFois) tache.derniereFois = jour;
     if (seance.termine && seance.type === 'tache') tache.statut = 'Fait';
   }
 }
