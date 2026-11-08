@@ -3,7 +3,7 @@
 Appli perso (PWA) qui dit **la seule action à faire maintenant**, lance un compte à rebours, demande un bilan, et range tout dans Notion.
 Cinquième appli de la suite (avec Repax, Argenx, Agendix et Brief) : même style technique (Express 5, mot de passe d'accès, jeton Notion en variable d'environnement, déploiement Docker sur le NAS).
 
-**État : étape 4.** L'action du moment, les projets (couleur, logo) et les tâches sont lus dans Notion ; on peut ajouter et cocher des tâches, lancer un compte à rebours (pause, +10 min), faire le bilan, et la séance part dans Notion. Une petite radio (mix YouTube de la base « Musique ») démarre avec le chrono, chaque séance se termine par un message d'encouragement avec le temps du jour et de la semaine, et une roue tire un projet au sort quand on ne sait pas quoi faire. Plan complet : [docs/PLAN.md](docs/PLAN.md). Bases Notion : [docs/NOTION.md](docs/NOTION.md).
+**État : étape 6.** L'action du moment, les projets (couleur, logo) et les tâches sont lus dans Notion ; on peut ajouter et cocher des tâches, lancer un compte à rebours (pause, +10 min), faire le bilan, et la séance part dans Notion. Une petite radio (mix YouTube de la base « Musique ») démarre avec le chrono, chaque séance se termine par un message d'encouragement avec le temps du jour et de la semaine, une roue tire un projet au sort quand on ne sait pas quoi faire, les activités (lire, réviser…) ont leur enveloppe de temps par semaine, et un gros chantier se découpe en étapes d'environ 30 minutes. Plan complet : [docs/PLAN.md](docs/PLAN.md). Bases Notion : [docs/NOTION.md](docs/NOTION.md).
 
 ## Lancer en local
 
@@ -30,7 +30,7 @@ Tests : `npm test` (aucun réseau ; Notion est testé avec un faux `fetch`).
 ## Ce que BOSSE ! écrit dans Notion (et rien d'autre)
 
 - **Sessions de travail** : une ligne par séance (début, fin, durée, tâche, projet, bilan, prochaine étape, origine « Chrono »).
-- **Mes projets** : `Temps cumulé (min)` (+ durée), `Dernière activité`, `Prochaine étape` (seulement si tu l'as changée), et `Statut` → Terminé si tu coches « Projet terminé ».
+- **Mes projets** : `Temps cumulé (min)` (+ durée), `Dernière activité`, `Prochaine étape` (seulement si tu l'as changée), `Statut` → Terminé si tu coches « Projet terminé », `Objectif de temps hebdo (min)` si tu le modifies dans l'appli, et une nouvelle ligne quand tu ajoutes une activité (avec la propriété `Type`, ajoutée à la base si elle manque).
 - **Tâches** : `Temps passé (min)`, `Dernière fois`, `Statut` (Fait / À faire), et les tâches créées dans l'appli.
 
 Si Notion est injoignable en fin de séance, la séance est gardée dans `attente.json` et renvoyée toutes les 2 minutes, sans doublon. Des tests vérifient les champs écrits.
@@ -50,3 +50,11 @@ Un lecteur YouTube intégré (youtube-nocookie.com) qui pioche dans la base Noti
 ## La roue
 
 Quand tu ne sais pas quoi faire : l'onglet Roue tire un **projet** au sort (ou « Hors projet » pour les tâches sans projet), puis propose la meilleure tâche de ce projet. La roue a une part par projet, large comme ses chances de sortir. Poids d'une part : `1 + 4 × retard sur l'objectif hebdo + 2 × ancienneté + 2 × échéance` (un projet en gros retard a jusqu'à 5 fois plus de chances qu'un projet à jour) ; un projet qui a atteint son objectif de la semaine garde 0,3. Le tirage est fait par le serveur (`crypto.randomInt`) : [choix.js](choix.js) (`groupes`, `tirer`), routes `GET /api/roue` et `POST /api/roue/tirer`. Une séance lancée depuis la roue est enregistrée dans Notion avec l'origine « Roue ». Avec « réduire les animations » activé sur le téléphone, la roue s'arrête sans tourner.
+
+## Activités et enveloppes
+
+Une **activité** (lire, réviser, brainstormer avec Claude…) est une ligne de « Mes projets » dont la propriété **`Type`** vaut `Activité` (vide ou `Projet` : un projet). Elle fonctionne comme un projet : chrono, temps cumulé, séances. Son **enveloppe** est son « Objectif de temps hebdo (min) » : l'écran Projets montre « 1 h sur 2 h cette semaine · il reste 1 h », comme les enveloppes d'Argenx. Une activité sans tâche est proposée sous son nom (ou sa « Prochaine étape »), peut sortir de la roue, et n'a pas de case « terminé » au bilan. Boutons : « + Activité » (nom, enveloppe, couleur), « Fixer / Modifier » sur chaque carte pour changer l'objectif ou l'enveloppe d'un projet ou d'une activité.
+
+## Découper un gros chantier
+
+Onglet Tâches → **Découper** : une étape par ligne (puces et numéros acceptés), avec une durée facultative entre parenthèses (`Brancher le serveur (2 h)`, `(15 min)`, `(1h30)`). Chaque étape devient une tâche d'environ 30 minutes ; les étapes de plus de 45 minutes sont coupées en blocs (`… (1/4)` à `(4/4)`), si la case est cochée. Un aperçu en direct montre le résultat. Jusqu'à 30 tâches à la fois, créées dans l'ordre (les tâches sont lues dans l'ordre de création : à score égal, la première écrite passe d'abord). L'appli n'appelle aucun modèle : tu peux écrire la liste toi-même, ou la demander à Claude dans une conversation et la coller. Code : [public/etapes.js](public/etapes.js).

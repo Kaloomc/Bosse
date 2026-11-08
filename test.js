@@ -205,7 +205,7 @@ test('Notion : lecture des projets, des tâches et des séances, sans aucune éc
   try {
     const { projets, taches, sessions } = await notion.lireTout();
     assert.deepStrictEqual(projets[0], {
-      id: 'p1', nom: 'Taotl', statut: 'En cours', categorie: 'Autre', priorite: null, couleur: 'Vert', hex: '#5be37d', echeance: null,
+      id: 'p1', nom: 'Taotl', type: 'Projet', statut: 'En cours', categorie: 'Autre', priorite: null, couleur: 'Vert', hex: '#5be37d', echeance: null,
       prochaineEtape: 'finir les animation', derniereActivite: '2026-10-16', tempsCumule: 207, objectifHebdo: null, logo: true, icone: '', url: 'https://notion/p1',
     });
     assert.strictEqual(projets[1].statut, null); // Kalooflix : statut vide
@@ -289,7 +289,7 @@ test('/api/maintenant : une action avec ses raisons, et « Autre chose » en cha
   assert.notStrictEqual(d2.action.id, d.action.id);
   assert.notStrictEqual(d2.action.projet?.id, d.action.projet.id);
   // tout refusé : retour au premier
-  const tous = ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8', 'projet:p-taotl', 'projet:p-vlog']; // les 10 choix de la démo
+  const tous = ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8', 'projet:p-taotl', 'projet:p-vlog', 'projet:p-lire']; // les 11 choix de la démo
   assert.strictEqual(d.total, tous.length);
   const d3 = await (await appeler(`/api/maintenant?exclus=${encodeURIComponent(tous.join(','))}`)).json();
   assert.strictEqual(d3.toutVu, true);
@@ -936,4 +936,181 @@ test('la page contient la roue et son lien dans la navigation', async () => {
   assert.match(html, /id="roue-g"/);
   assert.match(html, /href="#roue"/);
   assert.match(html, /id="tourner"/);
+});
+
+// ==========================================================================================
+// Étape 6 : activités, enveloppes, découpage en étapes
+// ==========================================================================================
+const { analyserEtapes, lireDuree } = require('./public/etapes.js');
+
+test('durées écrites à la main : 45, 45 min, 1 h, 1h30, 1,5 h', () => {
+  assert.strictEqual(lireDuree('45'), 45);
+  assert.strictEqual(lireDuree('45 min'), 45);
+  assert.strictEqual(lireDuree('1 h'), 60);
+  assert.strictEqual(lireDuree('1h30'), 90);
+  assert.strictEqual(lireDuree('1 h 30'), 90);
+  assert.strictEqual(lireDuree('1,5 h'), 90);
+  assert.strictEqual(lireDuree('2 heures'), 120);
+  assert.strictEqual(lireDuree('bientôt'), null);
+  assert.strictEqual(lireDuree(''), null);
+});
+
+test('découpage : une étape par ligne, puces et numéros ignorés, 30 minutes par défaut', () => {
+  const { etapes, total } = analyserEtapes('- Brancher le serveur\n\n  2. Acheter le nom de domaine (15 min)\n* [ ] Tester avec 8 téléphones\r\n[x] Page d’accueil (45 min)');
+  assert.deepStrictEqual(etapes, [
+    { titre: 'Brancher le serveur', duree: 30 },
+    { titre: 'Acheter le nom de domaine', duree: 15 },
+    { titre: 'Tester avec 8 téléphones', duree: 30 },
+    { titre: 'Page d’accueil', duree: 45 }, // 45 min : pas coupé (seuil : plus de 45)
+  ]);
+  assert.strictEqual(total, 120);
+  assert.deepStrictEqual(analyserEtapes('').etapes, []);
+  assert.deepStrictEqual(analyserEtapes('  \n \n').etapes, []);
+});
+
+test('découpage : les étapes de plus de 45 min sont coupées en blocs d’environ 30 min (si demandé)', () => {
+  const { etapes } = analyserEtapes('Serveur temps réel (2 h)\nDocumentation (1h)\nDomaine (50 min)');
+  assert.deepStrictEqual(etapes.map((e) => e.titre), [
+    'Serveur temps réel (1/4)', 'Serveur temps réel (2/4)', 'Serveur temps réel (3/4)', 'Serveur temps réel (4/4)',
+    'Documentation (1/2)', 'Documentation (2/2)', 'Domaine (1/2)', 'Domaine (2/2)',
+  ]);
+  assert.deepStrictEqual(etapes.map((e) => e.duree), [30, 30, 30, 30, 30, 30, 25, 25]);
+  // sans couper : une seule tâche, avec sa durée
+  assert.deepStrictEqual(analyserEtapes('Serveur temps réel (2 h)', { couper: false }).etapes, [{ titre: 'Serveur temps réel', duree: 120 }]);
+  // une parenthèse qui n'est pas une durée reste dans le titre ; durée absurde ignorée
+  assert.deepStrictEqual(analyserEtapes('Partie (2)\nÉtape (bientôt)\nMini (3 min)').etapes.map((e) => e.titre), ['Partie (2)', 'Étape (bientôt)', 'Mini (3 min)']);
+  // plafond : 240 min au maximum, 8 blocs au maximum
+  assert.strictEqual(analyserEtapes('Énorme (10 h)').etapes.length, 8);
+});
+
+test('activité sans tâche : proposée sous son nom (ou sa prochaine étape)', () => {
+  const cl = choisir([projet('Lire', { type: 'Activité' }), projet('Réviser', { type: 'Activité', prochaineEtape: 'Chapitre 3' }), projet('Taotl')], []);
+  const titres = Object.fromEntries(cl.map((c) => [c.projet.id, c.titre]));
+  assert.strictEqual(titres.Lire, 'Lire'); // pas « Avancer sur Lire »
+  assert.strictEqual(titres['Réviser'], 'Chapitre 3');
+  assert.strictEqual(titres.Taotl, 'Avancer sur Taotl');
+});
+
+test('API : les activités sont distinguées des projets, avec leur enveloppe', async () => {
+  const projets = (await json('/api/projets')).corps;
+  const lire = projets.find((p) => p.nom === 'Lire');
+  assert.strictEqual(lire.type, 'Activité');
+  assert.strictEqual(lire.objectifHebdo, 120);
+  assert.strictEqual(projets.find((p) => p.nom === 'Gorgée').type, 'Projet');
+  const sem = (await json('/api/maintenant')).corps.projetsSemaine.find((p) => p.nom === 'Lire');
+  assert.strictEqual(sem.type, 'Activité');
+  assert.strictEqual(sem.objectif, 120);
+});
+
+test('API : ajouter une activité (avec contrôles)', async () => {
+  assert.strictEqual((await post('/api/activites', { nom: '  ' })).status, 400);
+  assert.strictEqual((await post('/api/activites', { nom: 'Lire' })).status, 400); // existe déjà
+  assert.strictEqual((await post('/api/activites', { nom: 'Dessiner', objectifHebdo: 5 })).status, 400);
+  assert.strictEqual((await post('/api/activites', { nom: 'Dessiner', objectifHebdo: 9999 })).status, 400);
+  assert.strictEqual((await post('/api/activites', { nom: 'Dessiner', couleur: 'Fuchsia' })).status, 400);
+  const ok = await post('/api/activites', { nom: ' Dessiner ', objectifHebdo: 90, couleur: 'Rose' });
+  assert.strictEqual(ok.status, 201);
+  assert.deepStrictEqual([ok.corps.nom, ok.corps.type, ok.corps.hex], ['Dessiner', 'Activité', '#ff6fb5']);
+  const sansEnveloppe = await post('/api/activites', { nom: 'Méditer' });
+  assert.strictEqual(sansEnveloppe.status, 201);
+  const projets = (await json('/api/projets')).corps;
+  assert.strictEqual(projets.find((p) => p.nom === 'Dessiner').objectifHebdo, 90);
+  assert.strictEqual(projets.find((p) => p.nom === 'Méditer').objectifHebdo, null);
+  // une activité sans tâche devient un choix possible
+  const roueParts = (await json('/api/roue')).corps.parts;
+  assert.ok(roueParts.some((p) => p.nom === 'Dessiner' && p.type === 'Activité'));
+});
+
+test('API : modifier l’objectif de la semaine d’un projet ou d’une activité', async () => {
+  const lire = (await json('/api/projets')).corps.find((p) => p.nom === 'Lire');
+  assert.strictEqual((await json(`/api/projets/${lire.id}`, { method: 'PATCH', body: { objectifHebdo: 180 } })).corps.objectifHebdo, 180);
+  assert.strictEqual((await json('/api/projets')).corps.find((p) => p.nom === 'Lire').objectifHebdo, 180);
+  assert.strictEqual((await json(`/api/projets/${lire.id}`, { method: 'PATCH', body: { objectifHebdo: null } })).corps.objectifHebdo, null);
+  assert.strictEqual((await json(`/api/projets/${lire.id}`, { method: 'PATCH', body: { objectifHebdo: 0 } })).corps.objectifHebdo, null);
+  assert.strictEqual((await json(`/api/projets/${lire.id}`, { method: 'PATCH', body: { objectifHebdo: 7 } })).status, 400);
+  assert.strictEqual((await json(`/api/projets/${lire.id}`, { method: 'PATCH', body: { objectifHebdo: 'beaucoup' } })).status, 400);
+  assert.strictEqual((await json(`/api/projets/${lire.id}`, { method: 'PATCH', body: {} })).status, 400);
+  assert.strictEqual((await json('/api/projets/inconnu', { method: 'PATCH', body: { objectifHebdo: 60 } })).status, 404);
+  await json(`/api/projets/${lire.id}`, { method: 'PATCH', body: { objectifHebdo: 120 } }); // remet l'état de départ
+});
+
+test('API : découper un chantier crée une tâche par étape, dans l’ordre', async () => {
+  assert.strictEqual((await post('/api/taches/lot', { etapes: [] })).status, 400);
+  assert.strictEqual((await post('/api/taches/lot', { projetId: 'p-pause', etapes: [{ titre: 'x' }] })).status, 400);
+  assert.strictEqual((await post('/api/taches/lot', { etapes: [{ titre: '  ' }] })).status, 400);
+  assert.strictEqual((await post('/api/taches/lot', { etapes: [{ titre: 'x', duree: 1 }] })).status, 400);
+  assert.strictEqual((await post('/api/taches/lot', { etapes: Array.from({ length: 31 }, (_, i) => ({ titre: `étape ${i}` })) })).status, 400);
+
+  const etapes = analyserEtapes('Brancher le serveur (1 h)\nDomaine (15 min)\nTester').etapes;
+  const r = await post('/api/taches/lot', { projetId: 'p-gorgee', etapes });
+  assert.strictEqual(r.status, 201);
+  assert.strictEqual(r.corps.creees, 4);
+  assert.deepStrictEqual(r.corps.taches.map((t) => [t.titre, t.duree]), [['Brancher le serveur (1/2)', 30], ['Brancher le serveur (2/2)', 30], ['Domaine', 15], ['Tester', 30]]);
+  assert.ok(r.corps.taches.every((t) => t.projet.nom === 'Gorgée'));
+  const liste = (await json('/api/taches')).corps;
+  assert.ok(r.corps.taches.every((t) => liste.some((x) => x.id === t.id)));
+  const horsProjet = await post('/api/taches/lot', { etapes: [{ titre: 'Ranger' }] });
+  assert.strictEqual(horsProjet.corps.taches[0].projet, null);
+});
+
+test('Notion : une activité est créée avec son type, son enveloppe et sa couleur (la propriété « Type » est ajoutée si elle manque)', async () => {
+  await avecNotion(async () => {
+    let typeExiste = false;
+    const faux = fauxApi((cle, corps) => {
+      if (cle === `GET /databases/${IDS.projets}`) return { properties: typeExiste ? { Type: {} } : { Nom: {} } };
+      if (cle === `PATCH /databases/${IDS.projets}`) { typeExiste = true; return {}; }
+      if (cle === 'POST /pages') return { id: 'act', url: 'https://notion/act', properties: {
+        Nom: txt('title', corps.properties.Nom.title[0].text.content), Type: sel('Activité'), Statut: sel('En cours'), Couleur: sel(corps.properties.Couleur?.select.name),
+        'Objectif de temps hebdo (min)': nb(corps.properties['Objectif de temps hebdo (min)']?.number ?? null) } };
+      return null;
+    });
+    try {
+      const a = await notion.creerActivite({ nom: 'Lire', objectifHebdo: 120, couleur: 'Turquoise' });
+      assert.deepStrictEqual([a.nom, a.type, a.statut, a.couleur, a.hex, a.objectifHebdo], ['Lire', 'Activité', 'En cours', 'Turquoise', '#2de2d0', 120]);
+      const [verif, ajoutType, creation] = faux.appels;
+      assert.strictEqual(verif.cle, `GET /databases/${IDS.projets}`);
+      assert.deepStrictEqual(ajoutType.body, { properties: { Type: { select: { options: [{ name: 'Projet', color: 'blue' }, { name: 'Activité', color: 'green' }] } } } });
+      assert.strictEqual(creation.body.parent.database_id, IDS.projets);
+      assert.deepStrictEqual(cles(creation.body.properties), ['Couleur', 'Nom', 'Objectif de temps hebdo (min)', 'Statut', 'Type']);
+      assert.strictEqual(creation.body.properties.Statut.select.name, 'En cours');
+      // la propriété existe maintenant : une 2e activité ne la recrée pas, et sans enveloppe ni couleur ces champs ne sont pas écrits
+      await notion.creerActivite({ nom: 'Réviser', objectifHebdo: null, couleur: null });
+      const apres = faux.appels.slice(3);
+      assert.strictEqual(apres.filter((x) => x.cle.startsWith('PATCH')).length, 0);
+      assert.deepStrictEqual(cles(apres.find((x) => x.cle === 'POST /pages').body.properties), ['Nom', 'Statut', 'Type']);
+    } finally {
+      faux.restaurer();
+    }
+  });
+});
+
+test('Notion : modifier l’objectif n’écrit que « Objectif de temps hebdo (min) » ; les tâches sont lues dans l’ordre de création', async () => {
+  await avecNotion(async () => {
+    const faux = fauxApi((cle) => {
+      if (cle === 'PATCH /pages/p1') return {};
+      if (cle === `POST /databases/${IDS.taches}/query`) return { results: [], next_cursor: null };
+      if (cle === `POST /databases/${IDS.projets}/query`) return { results: [{ id: 'p1', properties: { Nom: txt('title', 'Lire'), Type: sel('Activité'), Statut: sel('En cours') } }, { id: 'p2', properties: { Nom: txt('title', 'Taotl'), Statut: sel('En cours') } }], next_cursor: null };
+      if (cle === `POST /databases/${IDS.sessions}/query`) return { results: [], next_cursor: null };
+      return null;
+    });
+    try {
+      await notion.majObjectif('p1', 150);
+      await notion.majObjectif('p1', null);
+      assert.deepStrictEqual(faux.appels[0].body, { properties: { 'Objectif de temps hebdo (min)': { number: 150 } } });
+      assert.deepStrictEqual(faux.appels[1].body, { properties: { 'Objectif de temps hebdo (min)': { number: null } } });
+      const { projets } = await notion.lireTout();
+      assert.deepStrictEqual(projets.map((p) => [p.nom, p.type]), [['Lire', 'Activité'], ['Taotl', 'Projet']]); // sans « Type » : Projet
+      const requeteTaches = faux.appels.find((a) => a.cle === `POST /databases/${IDS.taches}/query`);
+      assert.deepStrictEqual(requeteTaches.body.sorts, [{ timestamp: 'created_time', direction: 'ascending' }]);
+    } finally {
+      faux.restaurer();
+    }
+  });
+});
+
+test('la page contient les formulaires d’activité et de découpage, et charge etapes.js avant l’appli', async () => {
+  const html = await (await fetch(base + '/')).text();
+  for (const id of ['form-activite', 'ajouter-activite', 'form-decoupe', 'decouper-taches', 'd-texte', 'd-apercu']) assert.match(html, new RegExp(`id="${id}"`));
+  assert.ok(html.indexOf('etapes.js') > 0 && html.indexOf('etapes.js') < html.indexOf('app.js'));
+  assert.strictEqual((await fetch(base + '/etapes.js')).status, 200);
 });

@@ -7,7 +7,7 @@ module.exports = function demo(aujourdhui) {
   const il = (n) => ajouterJours(aujourdhui, -n);
   const dans = (n) => ajouterJours(aujourdhui, n);
   const projet = (id, nom, extra) => ({
-    id, nom, statut: 'En cours', categorie: null, priorite: null, couleur: 'Bleu', hex: hexDe('Bleu'), echeance: null,
+    id, nom, type: 'Projet', statut: 'En cours', categorie: null, priorite: null, couleur: 'Bleu', hex: hexDe('Bleu'), echeance: null,
     prochaineEtape: '', derniereActivite: null, tempsCumule: 0, objectifHebdo: null, logo: false, icone: '', url: null, ...extra,
   });
   const projets = [
@@ -15,6 +15,7 @@ module.exports = function demo(aujourdhui) {
     projet('p-gorgee', 'Gorgée', { categorie: 'Jeu / dev', couleur: 'Violet', hex: hexDe('Violet'), derniereActivite: il(22), tempsCumule: 39, objectifHebdo: 180 }),
     projet('p-taotl', 'Taotl', { categorie: 'Autre', couleur: 'Vert', hex: hexDe('Vert'), derniereActivite: il(22), tempsCumule: 207, prochaineEtape: 'finir les animations' }),
     projet('p-vlog', 'Montage du dernier vlog', { categorie: 'Vidéo / vlog', couleur: 'Rose', hex: hexDe('Rose') }),
+    projet('p-lire', 'Lire', { type: 'Activité', couleur: 'Turquoise', hex: hexDe('Turquoise'), objectifHebdo: 120, prochaineEtape: 'Lire un chapitre' }),
     projet('p-pause', 'Projet en pause', { statut: 'En pause', couleur: 'Orange', hex: hexDe('Orange') }),
   ];
   const tache = (id, titre, projetId, extra) => ({

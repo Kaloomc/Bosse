@@ -8,6 +8,8 @@
 // Ce que BOSSE ! écrit dans Notion, et rien d'autre (un test le vérifie) :
 //   - « Sessions de travail » : une ligne par séance ;
 //   - « Mes projets » : Temps cumulé (min), Dernière activité, Prochaine étape, et Statut → Terminé si tu le demandes ;
+//     Objectif de temps hebdo (min) si tu le modifies dans l'appli ; une nouvelle ligne quand tu ajoutes une activité
+//     (avec la propriété « Type », ajoutée à la base si elle manque) ;
 //   - « Tâches » : Temps passé (min), Dernière fois, Statut (Fait / À faire), et les tâches créées dans l'appli.
 // La base « Musique » (liens YouTube) est seulement lue.
 const { hexDe, duree: dureeTexte } = require('./projets');
@@ -82,11 +84,11 @@ async function trouverBases() {
 const getBases = () => (bases ??= trouverBases().catch((err) => { bases = null; throw err; }));
 
 // Toutes les pages d'une base (avec un filtre Notion facultatif).
-async function pages(id, filter) {
+async function pages(id, filter, sorts) {
   const sortie = [];
   let curseur;
   do {
-    const r = await api('POST', `/databases/${id}/query`, { page_size: 100, ...(filter && { filter }), ...(curseur && { start_cursor: curseur }) });
+    const r = await api('POST', `/databases/${id}/query`, { page_size: 100, ...(filter && { filter }), ...(sorts && { sorts }), ...(curseur && { start_cursor: curseur }) });
     sortie.push(...r.results);
     curseur = r.next_cursor;
   } while (curseur);
@@ -103,7 +105,7 @@ function lireProjet(page) {
   const p = page.properties;
   const couleur = choix(p['Couleur']);
   return {
-    id: page.id, nom: texte(p['Nom']) || 'Sans nom', statut: choix(p['Statut']), categorie: choix(p['Catégorie']),
+    id: page.id, nom: texte(p['Nom']) || 'Sans nom', type: choix(p['Type']) === 'Activité' ? 'Activité' : 'Projet', statut: choix(p['Statut']), categorie: choix(p['Catégorie']),
     priorite: choix(p['Priorité']), couleur, hex: hexDe(couleur), echeance: jour(p['Échéance']),
     prochaineEtape: texte(p['Prochaine étape']), derniereActivite: jour(p['Dernière activité']),
     tempsCumule: nombre(p['Temps cumulé (min)']) ?? 0, objectifHebdo: nombre(p['Objectif de temps hebdo (min)']),
@@ -136,7 +138,8 @@ function lireSession(page) {
 async function lireTout() {
   const b = await getBases();
   const projets = await pages(b.projets);
-  const taches = await pages(b.taches, { property: 'Statut', select: { does_not_equal: 'Fait' } });
+  // Tâches dans l'ordre de création : à score égal, la première écrite passe d'abord (utile pour une liste d'étapes).
+  const taches = await pages(b.taches, { property: 'Statut', select: { does_not_equal: 'Fait' } }, [{ timestamp: 'created_time', direction: 'ascending' }]);
   const depuis = ajouterJours(debutSemaine(aujourdhui()), -1);
   const sessions = b.sessions ? await pages(b.sessions, { property: 'Début', date: { on_or_after: depuis } }) : [];
   return { projets: projets.map(lireProjet), taches: taches.map(lireTache), sessions: sessions.map(lireSession).filter(Boolean) };
@@ -194,6 +197,40 @@ async function majTache(id, { duree, jour: j, fait }) {
   await api('PATCH', `/pages/${id}`, { properties });
 }
 
+// La propriété « Type » (Projet / Activité) de « Mes projets » : ajoutée à la base si elle manque (une seule vérification par démarrage).
+let typeVerifie = false;
+async function assurerType() {
+  if (typeVerifie) return;
+  const b = await getBases();
+  const base = await api('GET', `/databases/${b.projets}`);
+  if (!base.properties?.Type) {
+    await api('PATCH', `/databases/${b.projets}`, { properties: { Type: { select: { options: [{ name: 'Projet', color: 'blue' }, { name: 'Activité', color: 'green' }] } } } });
+  }
+  typeVerifie = true;
+}
+
+// Nouvelle activité (une ligne de « Mes projets » de type Activité) : objectifHebdo = son enveloppe de temps par semaine, en minutes.
+async function creerActivite({ nom, objectifHebdo, couleur }) {
+  await assurerType();
+  const b = await getBases();
+  const page = await api('POST', '/pages', {
+    parent: { database_id: b.projets },
+    properties: {
+      Nom: { title: [{ text: { content: nom } }] },
+      Type: { select: { name: 'Activité' } },
+      Statut: { select: { name: 'En cours' } },
+      ...(couleur && { Couleur: { select: { name: couleur } } }),
+      ...(objectifHebdo && { 'Objectif de temps hebdo (min)': { number: objectifHebdo } }),
+    },
+  });
+  return lireProjet(page);
+}
+
+// Modifier l'objectif de temps de la semaine d'un projet ou d'une activité (null : pas d'objectif).
+async function majObjectif(id, minutes) {
+  await api('PATCH', `/pages/${id}`, { properties: { 'Objectif de temps hebdo (min)': { number: minutes ?? null } } });
+}
+
 // Nouvelle tâche créée dans l'appli.
 async function creerTache({ titre, projetId, duree, priorite, echeance }) {
   const b = await getBases();
@@ -233,10 +270,10 @@ async function logo(idProjet) {
 }
 
 // Oublie les identifiants de bases gardés en mémoire (base recréée ou renommée).
-const oublier = () => { bases = null; };
+const oublier = () => { bases = null; typeVerifie = false; };
 
 module.exports = {
   get actif() { return !!token(); },
   lireTout, lireMusique, logo, oublier, lireProjet, lireTache, lireSession,
-  creerSession, majProjet, majTache, creerTache, statutTache,
+  creerSession, majProjet, majTache, creerTache, statutTache, creerActivite, majObjectif,
 };

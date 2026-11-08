@@ -254,3 +254,20 @@ form input[type="date"] { color-scheme: dark; }
 .legende-nom { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .legende-pc { font-variant-numeric: tabular-nums; color: var(--texte-2); min-width: 3.2em; text-align: right; }
 @media (prefers-reduced-motion: reduce) { #roue-g { transition: none !important; } }
+
+/* Activités, enveloppes, découpage en étapes */
+.boutons-entete { display: flex; gap: var(--e2); }
+.sous-titre.premier { margin-top: 0; }
+.sous-note { text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: var(--e2); }
+.objectif-zone { display: block; }
+.btn-texte { background: transparent; border: 0; color: var(--turquoise); font-size: 14px; padding: var(--e2) 0; min-height: 36px; cursor: pointer; }
+.obj-form { display: flex; align-items: center; gap: var(--e2); flex-wrap: wrap; }
+form.obj-form input[type="number"] { width: 110px; min-height: 44px; margin: 0; }
+.apercu { margin-bottom: var(--e3); }
+.resume-apercu { color: var(--turquoise); font-size: 14px; margin: 0 0 var(--e2); }
+.apercu-liste { list-style: none; margin: 0; padding: 0; background: var(--surface-2); border-radius: 12px; }
+.apercu-liste li { display: flex; align-items: center; justify-content: space-between; gap: var(--e2); padding: var(--e2) var(--e3); font-size: 14px; border-bottom: 1px solid var(--bord); }
+.apercu-liste li:last-child { border-bottom: 0; }
+.apercu-liste li.plus { color: var(--texte-2); }
+.apercu-liste .puce { white-space: nowrap; flex: none; }
+.apercu-liste li span:first-child { min-width: 0; overflow-wrap: anywhere; }

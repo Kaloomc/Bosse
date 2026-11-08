@@ -37,7 +37,7 @@ Les bases suivantes existent déjà dans la page « Projet » et sont retrouvée
 
 | Base | Ce que fait BOSSE ! |
 |---|---|
-| **Mes projets** (existante, structure inchangée) | lit les projets « En cours » ; écrit `Temps cumulé (min)`, `Dernière activité`, `Prochaine étape` (si tu l'as changée) et `Statut` → Terminé (si tu coches « Projet terminé ») |
+| **Mes projets** (existante ; propriété `Type` Projet / Activité ajoutée à l'étape 6) | lit les projets et activités « En cours » ; écrit `Temps cumulé (min)`, `Dernière activité`, `Prochaine étape` (si tu l'as changée), `Statut` → Terminé (si tu coches « Projet terminé »), `Objectif de temps hebdo (min)` (si tu le modifies dans l'appli) ; crée une ligne quand tu ajoutes une activité |
 | **Tâches** | lit les tâches ; écrit `Temps passé (min)`, `Dernière fois`, `Statut` (Fait / À faire) ; crée les tâches ajoutées dans l'appli |
 | **Sessions de travail** | une ligne par séance |
 | **Musique** | lit les liens YouTube (jamais modifiée) |

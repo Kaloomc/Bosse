@@ -61,7 +61,7 @@ function candidats(projets, taches) {
   for (const p of actifs.values()) {
     if (avecTache.has(p.id)) continue;
     sortie.push({
-      type: 'projet', id: `projet:${p.id}`, titre: p.prochaineEtape || `Avancer sur ${p.nom}`, duree: DUREE_DEFAUT, projet: p,
+      type: 'projet', id: `projet:${p.id}`, titre: p.prochaineEtape || (p.type === 'Activité' ? p.nom : `Avancer sur ${p.nom}`), duree: DUREE_DEFAUT, projet: p,
       echeance: p.echeance, priorite: p.priorite, derniere: p.derniereActivite, ordre: n++, url: p.url, notes: '',
     });
   }

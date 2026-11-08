@@ -25,3 +25,7 @@ Tronc commun 42 : ft_irc (réseau, binôme), Inception, Réviser l'Exam Rank 05 
 ## Musique (étape 2)
 Titre · Lien YouTube (vidéo ou playlist) · Désactivé (case : écarte un lien sans le supprimer). Lue par l'appli, jamais modifiée.
 8 mix Mac Miller de départ (7 vidéos et 1 playlist), tous vérifiés comme intégrables le 7 novembre 2026. Pour en ajouter : une ligne, un lien.
+
+## Activités (étape 6)
+Propriété ajoutée à « Mes projets » le 8 novembre 2026 : **Type** (sélection : `Projet`, `Activité`). Les lignes existantes n'ont pas été modifiées (Type vide = Projet).
+Activités de départ : Lire (enveloppe 120 min / semaine, turquoise), Brainstormer avec Claude (violet) et Réviser (orange), sans enveloppe : à fixer dans l'appli (Projets → Fixer une enveloppe) ou dans Notion (« Objectif de temps hebdo (min) »).

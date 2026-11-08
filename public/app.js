@@ -322,6 +322,7 @@ async function chargerBilan() {
   if (c.etat !== 'fini') return void (location.hash = '#chrono');
   const cand = c.candidat;
   const projet = cand.projet;
+  const peutTerminer = !(cand.type === 'projet' && projet?.type === 'Activité'); // une activité ne se termine pas
   const caseTermine = cand.type === 'projet' ? 'Projet terminé' : 'Tâche terminée';
   $('#bilan-contenu').innerHTML = `
     <form id="form-bilan" class="carte bilan" style="--c:${esc(projet ? projet.hex : '#8b93ff')}">
@@ -337,7 +338,7 @@ async function chargerBilan() {
       <label for="b-bilan">Où j’en suis</label>
       <textarea id="b-bilan" rows="3" maxlength="2000" placeholder="Ce qui est fait, ce qui bloque…"></textarea>
       ${projet ? `<label for="b-etape">Prochaine étape</label><input id="b-etape" type="text" maxlength="500" value="${esc(projet.prochaineEtape || '')}" placeholder="Par quoi continuer ?">` : ''}
-      <label class="case"><input id="b-termine" type="checkbox"> ${caseTermine}</label>
+      ${peutTerminer ? `<label class="case"><input id="b-termine" type="checkbox"> ${caseTermine}</label>` : ''}
       <button class="btn-principal" type="submit">${ico('check')}Enregistrer</button>
       <p class="message" role="alert"></p>
     </form>`;
@@ -353,7 +354,7 @@ async function chargerBilan() {
     bouton.disabled = true;
     try {
       const r = await api('/api/bilan', { method: 'POST', body: {
-        duree: Number(champ.value), bilan: $('#b-bilan').value, prochaineEtape: $('#b-etape')?.value ?? '', termine: $('#b-termine').checked,
+        duree: Number(champ.value), bilan: $('#b-bilan').value, prochaineEtape: $('#b-etape')?.value ?? '', termine: $('#b-termine')?.checked === true,
       } });
       memoriserExclus([]);
       $('#bilan-contenu').innerHTML = `
@@ -375,25 +376,95 @@ async function chargerBilan() {
 }
 
 // --- Écran « Projets » ---------------------------------------------------------------------------------
+// Objectif de la semaine d'un projet, ou enveloppe de temps d'une activité : barre, temps restant, et bouton pour le modifier.
+function zoneObjectif(p) {
+  const activite = p.type === 'Activité';
+  const mot = activite ? 'enveloppe' : 'objectif';
+  const bouton = `<button class="btn-texte" type="button" data-objectif="${esc(p.id)}" data-valeur="${p.objectifHebdo || ''}">${p.objectifHebdo ? 'Modifier' : activite ? 'Fixer une enveloppe' : 'Fixer un objectif'}</button>`;
+  if (!p.objectifHebdo) return `<div class="objectif objectif-zone"><span class="objectif-texte">Pas d’${mot} cette semaine</span>${bouton}</div>`;
+  const reste = p.objectifHebdo - p.tempsSemaine;
+  return `<div class="objectif objectif-zone">${barre(p.tempsSemaine, p.objectifHebdo)}
+    <span class="objectif-texte">${duree(p.tempsSemaine)} sur ${duree(p.objectifHebdo)} cette semaine${reste <= 0 ? ' · atteint' : ` · il reste ${duree(reste)}`}</span>${bouton}</div>`;
+}
+
+const carteProjet = (p) => `
+  <article class="carte projet" style="--c:${esc(p.hex)}">
+    <header class="projet-tete">
+      ${pastille(p)}
+      <div class="projet-titre"><h3>${esc(p.nom)}</h3>${p.categorie ? `<span class="categorie">${esc(p.categorie)}</span>` : ''}</div>
+      ${p.url ? `<a class="lien-notion" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer" aria-label="Ouvrir ${esc(p.nom)} dans Notion">${ico('link')}</a>` : ''}
+    </header>
+    ${p.prochaineEtape ? `<p class="etape-courte"><b>Prochaine étape</b> ${esc(p.prochaineEtape)}</p>` : ''}
+    ${zoneObjectif(p)}
+    <div class="puces">
+      ${p.type === 'Activité' && !p.tachesOuvertes ? '' : `<span class="puce">${p.tachesOuvertes} tâche${p.tachesOuvertes > 1 ? 's' : ''} à faire</span>`}
+      ${p.tempsCumule ? `<span class="puce">${ico('timer')}${duree(p.tempsCumule)} au total</span>` : ''}
+      ${puceEcheance(p.echeance)}
+      ${p.priorite ? `<span class="puce prio-${esc(p.priorite)}">Priorité ${esc(p.priorite.toLowerCase())}</span>` : ''}
+    </div>
+  </article>`;
+
 async function chargerProjets() {
   const liste = await api('/api/projets');
-  $('#projets-contenu').innerHTML = liste.length ? liste.map((p) => `
-    <article class="carte projet" style="--c:${esc(p.hex)}">
-      <header class="projet-tete">
-        ${pastille(p)}
-        <div class="projet-titre"><h3>${esc(p.nom)}</h3>${p.categorie ? `<span class="categorie">${esc(p.categorie)}</span>` : ''}</div>
-        ${p.url ? `<a class="lien-notion" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer" aria-label="Ouvrir ${esc(p.nom)} dans Notion">${ico('link')}</a>` : ''}
-      </header>
-      ${p.prochaineEtape ? `<p class="etape-courte"><b>Prochaine étape</b> ${esc(p.prochaineEtape)}</p>` : ''}
-      ${p.objectifHebdo ? `<div class="objectif">${barre(p.tempsSemaine, p.objectifHebdo)}<span class="objectif-texte">${duree(p.tempsSemaine)} sur ${duree(p.objectifHebdo)} cette semaine${p.tempsSemaine >= p.objectifHebdo ? ' · atteint' : ` · il reste ${duree(p.objectifHebdo - p.tempsSemaine)}`}</span></div>` : ''}
-      <div class="puces">
-        <span class="puce">${p.tachesOuvertes} tâche${p.tachesOuvertes > 1 ? 's' : ''} à faire</span>
-        ${p.tempsCumule ? `<span class="puce">${ico('timer')}${duree(p.tempsCumule)} au total</span>` : ''}
-        ${puceEcheance(p.echeance)}
-        ${p.priorite ? `<span class="puce prio-${esc(p.priorite)}">Priorité ${esc(p.priorite.toLowerCase())}</span>` : ''}
-      </div>
-    </article>`).join('') : '<div class="vide"><p>Aucun projet « En cours » dans Notion.</p></div>';
+  const projets = liste.filter((p) => p.type !== 'Activité');
+  const activites = liste.filter((p) => p.type === 'Activité');
+  $('#projets-contenu').innerHTML = liste.length
+    ? (projets.length ? `<h3 class="sous-titre premier">Projets</h3>${projets.map(carteProjet).join('')}` : '')
+      + (activites.length ? `<h3 class="sous-titre">Activités <span class="sous-note">enveloppes de la semaine</span></h3>${activites.map(carteProjet).join('')}` : '')
+    : '<div class="vide"><p>Aucun projet « En cours » dans Notion.</p></div>';
 }
+
+// Modifier l'objectif / l'enveloppe : le bouton ouvre un petit formulaire à la place de la ligne.
+$('#projets-contenu').addEventListener('click', async (ev) => {
+  const ouvrir = ev.target.closest('[data-objectif]');
+  if (ouvrir) {
+    const zone = ouvrir.closest('.objectif-zone');
+    zone.innerHTML = `<form class="obj-form" data-id="${esc(ouvrir.dataset.objectif)}">
+      <input type="number" min="0" max="3000" step="15" value="${esc(ouvrir.dataset.valeur)}" placeholder="minutes" aria-label="Minutes par semaine" required>
+      <span class="objectif-texte">min / semaine</span>
+      <button class="btn-ajout" type="submit">OK</button>
+      <button class="btn-texte" type="button" data-annuler-objectif>Annuler</button></form>`;
+    zone.querySelector('input').focus();
+  } else if (ev.target.closest('[data-annuler-objectif]')) {
+    chargerProjets().catch((e) => toast(e.message));
+  }
+});
+$('#projets-contenu').addEventListener('submit', async (ev) => {
+  const form = ev.target.closest('.obj-form');
+  if (!form) return;
+  ev.preventDefault();
+  const minutes = Number(form.querySelector('input').value);
+  try {
+    await api(`/api/projets/${encodeURIComponent(form.dataset.id)}`, { method: 'PATCH', body: { objectifHebdo: minutes > 0 ? minutes : null } });
+    toast(minutes > 0 ? 'Objectif enregistré' : 'Objectif retiré');
+    await chargerProjets();
+  } catch (e) {
+    toast(e.message);
+  }
+});
+
+$('#ajouter-activite').addEventListener('click', () => {
+  const form = $('#form-activite');
+  form.hidden = !form.hidden;
+  if (!form.hidden) $('#a-nom').focus();
+});
+$('#form-activite').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const msg = $('#form-activite .message');
+  msg.textContent = '';
+  const bouton = ev.submitter;
+  bouton.disabled = true;
+  try {
+    await api('/api/activites', { method: 'POST', body: { nom: $('#a-nom').value, objectifHebdo: $('#a-enveloppe').value || null, couleur: $('#a-couleur').value } });
+    $('#form-activite').reset();
+    $('#form-activite').hidden = true;
+    toast('Activité ajoutée');
+    await chargerProjets();
+  } catch (err) {
+    msg.textContent = err.message;
+  }
+  bouton.disabled = false;
+});
 
 // --- Écran « Tâches » ------------------------------------------------------------------------------------------
 async function chargerTaches() {
@@ -549,6 +620,51 @@ async function tournerRoue() {
   bouton.disabled = false;
 }
 $('#tourner').addEventListener('click', tournerRoue);
+
+// Découper un gros chantier : une étape par ligne → une tâche par étape (aperçu en direct, voir etapes.js).
+async function remplirProjets(select, vide) {
+  const projets = await api('/api/projets');
+  select.innerHTML = `<option value="">${vide}</option>${projets.map((p) => `<option value="${esc(p.id)}">${esc(p.nom)}${p.type === 'Activité' ? ' (activité)' : ''}</option>`).join('')}`;
+}
+const apercuEtapes = () => analyserEtapes($('#d-texte').value, { couper: $('#d-couper').checked });
+function majApercu() {
+  const { etapes, total } = apercuEtapes();
+  const zone = $('#d-apercu');
+  if (!etapes.length) return void (zone.innerHTML = '');
+  const trop = etapes.length > 30;
+  zone.innerHTML = `<p class="${trop ? 'message' : 'resume-apercu'}">${trop ? `30 tâches au maximum à la fois (là : ${etapes.length}).` : `${etapes.length} tâche${etapes.length > 1 ? 's' : ''} · ${duree(total)} au total`}</p>
+    <ol class="apercu-liste">${etapes.slice(0, 12).map((e) => `<li><span>${esc(e.titre)}</span><span class="puce">${duree(e.duree)}</span></li>`).join('')}${etapes.length > 12 ? `<li class="plus">… et ${etapes.length - 12} autres</li>` : ''}</ol>`;
+}
+$('#decouper-taches').addEventListener('click', async () => {
+  const form = $('#form-decoupe');
+  form.hidden = !form.hidden;
+  if (form.hidden) return;
+  try { await remplirProjets($('#d-projet'), 'Hors projet (to-do simple)'); } catch (e) { toast(e.message); }
+  $('#d-texte').focus();
+});
+$('#d-texte').addEventListener('input', majApercu);
+$('#d-couper').addEventListener('change', majApercu);
+$('#form-decoupe').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const msg = $('#form-decoupe .message');
+  msg.textContent = '';
+  const { etapes } = apercuEtapes();
+  if (!etapes.length) return void (msg.textContent = 'Écris au moins une étape.');
+  if (etapes.length > 30) return void (msg.textContent = '30 tâches au maximum à la fois.');
+  const bouton = ev.submitter;
+  bouton.disabled = true;
+  try {
+    const r = await api('/api/taches/lot', { method: 'POST', body: { projetId: $('#d-projet').value || null, etapes } });
+    $('#form-decoupe').reset();
+    $('#d-apercu').innerHTML = '';
+    $('#form-decoupe').hidden = true;
+    toast(`${r.creees} tâche${r.creees > 1 ? 's' : ''} créée${r.creees > 1 ? 's' : ''}`);
+  } catch (err) {
+    msg.textContent = err.message;
+  }
+  await chargerTaches().catch(() => {});
+  bouton.disabled = false;
+});
 
 // --- Écran « Réglages » ---------------------------------------------------------------------------------------------
 async function chargerReglages() {

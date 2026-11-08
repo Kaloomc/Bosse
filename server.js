@@ -9,6 +9,7 @@ const stockage = require('./stockage');
 const synchro = require('./synchro');
 const { totaux, appliquerSeance } = require('./seances');
 const { aujourdhui, isoParis } = require('./temps');
+const { COULEURS, hexDe } = require('./projets');
 const bibliotheque = require('./musique');
 const encouragements = require('./encouragements');
 
@@ -79,7 +80,7 @@ async function donnees({ force = false } = {}) {
 }
 
 // Un candidat tel que l'écran l'affiche.
-const publicProjet = (p) => p && { id: p.id, nom: p.nom, hex: p.hex, couleur: p.couleur, logo: p.logo, icone: p.icone, categorie: p.categorie, prochaineEtape: p.prochaineEtape };
+const publicProjet = (p) => p && { id: p.id, nom: p.nom, type: p.type || 'Projet', hex: p.hex, couleur: p.couleur, logo: p.logo, icone: p.icone, categorie: p.categorie, prochaineEtape: p.prochaineEtape };
 const publicCandidat = (c) => ({
   id: c.id, type: c.type, titre: c.titre, duree: c.duree, echeance: c.echeance, priorite: c.priorite, score: c.score,
   raisons: c.raisons, raison: c.raisons.slice(0, 2).join(' · '), url: c.url, notes: c.notes, projet: publicProjet(c.projet),
@@ -98,7 +99,7 @@ const lesTotaux = (d) => totaux(d.sessions || [], aujourdhui());
 function projetsSemaine(d, t) {
   return d.projets
     .filter((p) => p.statut === 'En cours')
-    .map((p) => ({ id: p.id, nom: p.nom, hex: p.hex, logo: p.logo, icone: p.icone, minutes: t.parProjetSemaine.get(p.id) || 0, objectif: p.objectifHebdo || null }))
+    .map((p) => ({ id: p.id, nom: p.nom, type: p.type || 'Projet', hex: p.hex, logo: p.logo, icone: p.icone, minutes: t.parProjetSemaine.get(p.id) || 0, objectif: p.objectifHebdo || null }))
     .filter((p) => p.minutes > 0 || p.objectif)
     .sort((a, b) => b.minutes - a.minutes || (b.objectif || 0) - (a.objectif || 0) || a.nom.localeCompare(b.nom, 'fr'));
 }
@@ -135,7 +136,7 @@ app.get('/api/maintenant', async (req, res) => {
 // Les parts de la roue : un projet (ou « Hors projet ») par part, avec ses chances de sortir (retard sur l'objectif hebdo,
 // ancienneté, échéance : voir choix.js). Le tirage se fait ici, sur le serveur.
 const publicPart = (g) => ({
-  cle: g.cle, id: g.projet?.id || null, nom: g.projet?.nom || 'Hors projet', hex: g.projet?.hex || '#8b93ff', logo: !!g.projet?.logo, icone: g.projet?.icone || '',
+  cle: g.cle, id: g.projet?.id || null, nom: g.projet?.nom || 'Hors projet', type: g.projet?.type || 'Projet', hex: g.projet?.hex || '#8b93ff', logo: !!g.projet?.logo, icone: g.projet?.icone || '',
   poids: Math.round(g.poids * 100) / 100, probabilite: g.probabilite, retard: g.retard > 0, atteint: g.atteint, nbChoix: g.candidats.length,
 });
 const aleatoire = () => crypto.randomInt(0, 1e9) / 1e9;
@@ -154,7 +155,71 @@ app.post('/api/roue/tirer', async (req, res) => {
   res.json({ parts: liste.map(publicPart), index, action: publicCandidat(liste[index].candidats[0]) });
 });
 
-// Projets « En cours », avec leurs tâches ouvertes et le temps de la semaine.
+// Découper un gros chantier : crée plusieurs tâches d'un coup (une par étape), dans l'ordre. Corps : { projetId, etapes: [{ titre, duree }] }.
+// Si Notion s'arrête en route, on dit combien de tâches sont déjà créées (elles restent dans la liste).
+app.post('/api/taches/lot', async (req, res) => {
+  const d = await donnees();
+  const projetId = req.body?.projetId || null;
+  verifier(!projetId || d.projets.some((p) => p.id === projetId && p.statut === 'En cours'), 'Projet inconnu ou pas « En cours ».');
+  const etapes = req.body?.etapes;
+  verifier(Array.isArray(etapes) && etapes.length >= 1, 'Écris au moins une étape.');
+  verifier(etapes.length <= 30, '30 étapes au maximum à la fois.');
+  const propres = etapes.map((e) => {
+    const titre = String(e?.titre ?? '').trim().slice(0, 200);
+    const duree = e?.duree == null ? choix.DUREE_DEFAUT : Math.round(Number(e.duree));
+    verifier(titre, 'Une étape n’a pas de titre.');
+    verifier(Number.isFinite(duree) && duree >= 5 && duree <= 240, 'Durée d’une étape : de 5 à 240 minutes.');
+    return { titre, projetId, duree, priorite: null, echeance: null };
+  });
+  const creees = [];
+  try {
+    for (const infos of propres) {
+      const tache = notion.actif
+        ? await notion.creerTache(infos)
+        : { id: `t-${crypto.randomUUID()}`, statut: 'À faire', tempsPasse: 0, derniereFois: null, notes: '', url: null, ...infos };
+      d.taches = [...d.taches, tache];
+      creees.push(tache);
+    }
+  } catch (err) {
+    throw echec(502, `${creees.length} tâche${creees.length > 1 ? 's' : ''} créée${creees.length > 1 ? 's' : ''} sur ${propres.length} avant l’erreur : ${err.message}`);
+  }
+  res.status(201).json({ creees: creees.length, taches: creees.map((t) => publicTache(t, d)) });
+});
+
+// Nouvelle activité (lire, réviser, brainstormer avec Claude…) : une ligne « Activité » de « Mes projets », avec son enveloppe
+// de temps par semaine (en minutes, facultative) et sa couleur.
+app.post('/api/activites', async (req, res) => {
+  const d = await donnees();
+  const nom = String(req.body?.nom ?? '').trim().slice(0, 100);
+  verifier(nom, 'Donne un nom à l’activité.');
+  verifier(!d.projets.some((p) => p.nom.toLowerCase() === nom.toLowerCase() && p.statut === 'En cours'), 'Il existe déjà un projet ou une activité « En cours » avec ce nom.');
+  const objectifHebdo = req.body?.objectifHebdo == null || req.body.objectifHebdo === '' ? null : Math.round(Number(req.body.objectifHebdo));
+  verifier(objectifHebdo === null || (Number.isFinite(objectifHebdo) && objectifHebdo >= 15 && objectifHebdo <= 3000), 'Enveloppe de 15 à 3000 minutes par semaine.');
+  const couleur = req.body?.couleur || null;
+  verifier(!couleur || Object.hasOwn(COULEURS, couleur), 'Couleur inconnue.');
+  const infos = { nom, objectifHebdo, couleur };
+  const activite = notion.actif
+    ? await notion.creerActivite(infos)
+    : { id: `p-${crypto.randomUUID()}`, nom, type: 'Activité', statut: 'En cours', categorie: null, priorite: null, couleur, hex: hexDe(couleur), echeance: null, prochaineEtape: '', derniereActivite: null, tempsCumule: 0, objectifHebdo, logo: false, icone: '', url: null };
+  d.projets = [...d.projets, activite];
+  res.status(201).json(publicProjet(activite));
+});
+
+// Modifier l'objectif de temps de la semaine d'un projet ou d'une activité (objectifHebdo: minutes, ou null pour l'enlever).
+app.patch('/api/projets/:id', async (req, res) => {
+  const d = await donnees();
+  const projet = d.projets.find((p) => p.id === req.params.id);
+  verifier(projet, 'Projet introuvable : rafraîchis la liste.', 404);
+  const brut = req.body?.objectifHebdo;
+  verifier(brut === null || Number.isFinite(brut), 'Indique l’objectif en minutes par semaine (ou rien pour l’enlever).');
+  const objectifHebdo = brut === null || brut === 0 ? null : Math.round(brut);
+  verifier(objectifHebdo === null || (objectifHebdo >= 15 && objectifHebdo <= 3000), 'Objectif de 15 à 3000 minutes par semaine.');
+  if (notion.actif) await notion.majObjectif(projet.id, objectifHebdo);
+  projet.objectifHebdo = objectifHebdo;
+  res.json({ id: projet.id, objectifHebdo });
+});
+
+// Projets et activités « En cours », avec leurs tâches ouvertes et le temps de la semaine.
 app.get('/api/projets', async (req, res) => {
   const d = await donnees();
   const t = lesTotaux(d);

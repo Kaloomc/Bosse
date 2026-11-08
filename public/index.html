@@ -73,17 +73,46 @@
     </section>
 
     <section id="projets" class="ecran" hidden>
-      <h2 class="titre-ecran">Projets</h2>
+      <div class="entete-ecran">
+        <h2 class="titre-ecran">Projets</h2>
+        <button class="btn-ajout" type="button" id="ajouter-activite"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>Activité</button>
+      </div>
+      <form id="form-activite" class="carte" hidden>
+        <p class="note gauche">Une activité (lire, réviser, brainstormer avec Claude…) fonctionne comme un projet : chrono, temps cumulé, objectif de la semaine. Son « enveloppe » est le temps que tu veux y passer chaque semaine.</p>
+        <label for="a-nom">Nom</label>
+        <input id="a-nom" type="text" maxlength="100" required autocomplete="off">
+        <div class="deux">
+          <div><label for="a-enveloppe">Enveloppe (min / semaine)</label><input id="a-enveloppe" type="number" min="15" max="3000" step="15" placeholder="ex. 120"></div>
+          <div><label for="a-couleur">Couleur</label>
+            <select id="a-couleur"><option>Turquoise</option><option>Violet</option><option>Bleu</option><option>Orange</option><option>Jaune</option><option>Rose</option><option>Vert</option><option>Rouge</option></select></div>
+        </div>
+        <button class="btn-principal" type="submit">Ajouter l’activité</button>
+        <p class="message" role="alert"></p>
+      </form>
       <div id="projets-contenu"></div>
     </section>
 
     <section id="taches" class="ecran" hidden>
       <div class="entete-ecran">
         <h2 class="titre-ecran">Tâches</h2>
-        <button class="btn-ajout" type="button" id="ajouter-tache">
-          <svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>Ajouter
-        </button>
+        <div class="boutons-entete">
+          <button class="btn-ajout" type="button" id="decouper-taches">Découper</button>
+          <button class="btn-ajout" type="button" id="ajouter-tache">
+            <svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>Ajouter
+          </button>
+        </div>
       </div>
+      <form id="form-decoupe" class="carte" hidden>
+        <p class="note gauche">Un gros chantier ? Écris ses étapes, une par ligne : chacune devient une tâche d’environ 30 minutes. Tu peux préciser une durée : « Brancher le serveur (2 h) ».</p>
+        <label for="d-projet">Projet</label>
+        <select id="d-projet"></select>
+        <label for="d-texte">Étapes (une par ligne)</label>
+        <textarea id="d-texte" rows="6" placeholder="Brancher le serveur temps réel (2 h)&#10;Acheter le nom de domaine (15 min)&#10;Tester avec 8 téléphones"></textarea>
+        <label class="case"><input id="d-couper" type="checkbox" checked> Couper les étapes de plus de 45 min en blocs de 30 min</label>
+        <div id="d-apercu" class="apercu" aria-live="polite"></div>
+        <button class="btn-principal" type="submit">Créer les tâches</button>
+        <p class="message" role="alert"></p>
+      </form>
       <form id="form-tache" class="carte" hidden>
         <label for="t-titre">Tâche</label>
         <input id="t-titre" type="text" maxlength="200" required autocomplete="off">
@@ -133,6 +162,7 @@
   </nav>
 
   <div id="toast" role="status" aria-live="polite"></div>
+  <script src="etapes.js"></script>
   <script src="radio.js"></script>
   <script src="app.js"></script>
 </body>
