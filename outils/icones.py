@@ -1,51 +1,67 @@
 #!/usr/bin/env python3
-"""Fabrique les icônes de l'appli (public/icons/icon-192.png et icon-512.png).
+"""Fabrique les icônes de l'appli à partir du fichier maître public/icons/icon.svg.
 
-Usage : python3 outils/icones.py
-Un « B » avec un point d'exclamation turquoise et un halo violet sur fond sombre.
-Le motif reste dans les 80 % centraux : l'icône est « maskable » (Android peut la rogner en rond).
+Usage : python3 outils/icones.py        (hors production : rien de tout ça ne tourne sur le NAS)
+
+Sorties dans public/icons/ :
+  icon-192.png, icon-512.png        coins arrondis, fond transparent aux angles (purpose « any »)
+  icon-maskable-512.png             plein cadre, symbole dans les 80 % centraux (purpose « maskable »)
+  apple-touch-icon.png (180)        plein cadre : iOS arrondit lui-même
+  favicon.svg, favicon-48.png       plein cadre (symbole sur fond plein)
+
+Rendu : le navigateur sans écran livré avec Playwright (ou Chromium / Chrome si CHROMIUM est défini ou trouvé dans le PATH).
+Aucune dépendance Python ni Node n'est ajoutée à l'appli.
 """
+import glob
 import os
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+import shutil
+import subprocess
+import sys
+import tempfile
 
-POLICE = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-FOND = (11, 13, 22)
-VIOLET = (167, 139, 250)
-TURQUOISE = (45, 226, 208)
-BLANC = (238, 240, 255)
+RACINE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+DOSSIER = os.path.join(RACINE, "public", "icons")
+RAYON_ARRONDI = 112  # sur 512
 
 
-def icone(taille):
-    s = taille * 4  # dessin en grand puis réduction : bords lisses
-    image = Image.new("RGB", (s, s), FOND)
-    police = ImageFont.truetype(POLICE, int(s * 0.5))
-    police_point = ImageFont.truetype(POLICE, int(s * 0.5))
+def navigateur():
+    if os.environ.get("CHROMIUM"):
+        return os.environ["CHROMIUM"]
+    trouves = glob.glob(os.path.expanduser("~/.cache/ms-playwright/chromium_headless_shell-*/*/chrome-headless-shell"))
+    if trouves:
+        return sorted(trouves)[-1]
+    for nom in ("chromium", "chromium-browser", "google-chrome", "chrome"):
+        if shutil.which(nom):
+            return shutil.which(nom)
+    sys.exit("Aucun navigateur trouvé : définis CHROMIUM=/chemin/vers/chrome.")
 
-    def texte(couche, d, couleur):
-        # « B » à gauche du centre, « ! » à droite : l'ensemble est centré
-        lb = d.textbbox((0, 0), "B", font=police)
-        lp = d.textbbox((0, 0), "!", font=police_point)
-        largeur = (lb[2] - lb[0]) + int(s * 0.03) + (lp[2] - lp[0])
-        x = (s - largeur) // 2
-        hauteur = lb[3] - lb[1]
-        y = (s - hauteur) // 2 - lb[1]
-        d.text((x - lb[0], y), "B", font=police, fill=couleur[0])
-        d.text((x + (lb[2] - lb[0]) + int(s * 0.03) - lp[0], y), "!", font=police_point, fill=couleur[1])
 
-    halo = Image.new("RGB", (s, s), (0, 0, 0))
-    texte(halo, ImageDraw.Draw(halo), (VIOLET, TURQUOISE))
-    halo = halo.filter(ImageFilter.GaussianBlur(s * 0.035))
-    image = Image.blend(image, Image.eval(halo, lambda v: v), 0.0)  # point de départ neutre
-    # Le halo s'ajoute au fond (écran) pour rester lumineux sur le sombre
-    from PIL import ImageChops
-    image = ImageChops.add(image, halo)
-    texte(image, ImageDraw.Draw(image), (BLANC, TURQUOISE))
-    return image.resize((taille, taille), Image.LANCZOS)
+def svg(arrondi):
+    texte = open(os.path.join(DOSSIER, "icon.svg"), encoding="utf-8").read()
+    rx = RAYON_ARRONDI if arrondi else 0
+    return texte.replace('id="cadre" width="512" height="512" rx="0"', f'id="cadre" width="512" height="512" rx="{rx}"')
+
+
+def png(chemin, taille, arrondi):
+    with tempfile.TemporaryDirectory() as tmp:
+        page = os.path.join(tmp, "p.html")
+        with open(page, "w", encoding="utf-8") as f:
+            f.write(f'<html><body style="margin:0;background:transparent"><div style="width:{taille}px;height:{taille}px">'
+                    f'{svg(arrondi).replace("<svg ", "<svg style=\"display:block;width:100%;height:100%\" ", 1)}</div></body></html>')
+        sortie = os.path.join(tmp, "s.png")
+        subprocess.run([navigateur(), "--no-sandbox", "--hide-scrollbars", "--default-background-color=00000000",
+                        f"--screenshot={sortie}", f"--window-size={taille},{taille}", "file://" + page],
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        shutil.copy(sortie, chemin)
+    print(os.path.relpath(chemin, RACINE))
 
 
 if __name__ == "__main__":
-    dossier = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "public", "icons")
-    os.makedirs(dossier, exist_ok=True)
-    for t in (192, 512):
-        icone(t).save(os.path.join(dossier, f"icon-{t}.png"), optimize=True)
-        print(f"icon-{t}.png")
+    png(os.path.join(DOSSIER, "icon-192.png"), 192, True)
+    png(os.path.join(DOSSIER, "icon-512.png"), 512, True)
+    png(os.path.join(DOSSIER, "icon-maskable-512.png"), 512, False)
+    png(os.path.join(DOSSIER, "apple-touch-icon.png"), 180, False)
+    png(os.path.join(DOSSIER, "favicon-48.png"), 48, False)
+    with open(os.path.join(DOSSIER, "favicon.svg"), "w", encoding="utf-8") as f:
+        f.write(svg(False))
+    print("public/icons/favicon.svg")

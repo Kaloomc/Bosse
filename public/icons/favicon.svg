@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- BOSSE ! : un anneau de chrono qui se referme autour d'un éclair. 100 % flat, 2 couleurs de l'appli :
+       fond --fond (#0b0d16), symbole --accent (#8b93ff). L'éclair est celui des icônes de l'interface (i-zap), l'anneau celui du chrono (bouts arrondis).
+       Fichier maître : les PNG et le favicon sont fabriqués par outils/icones.py (rx="0" = plein cadre ; le script met des coins arrondis aux versions « any »). -->
+  <rect id="cadre" width="512" height="512" rx="0" fill="#0b0d16"/>
+  <circle cx="256" cy="256" r="160" transform="rotate(-90 256 256)" fill="none" stroke="#8b93ff" stroke-width="38" stroke-linecap="round" stroke-dasharray="804 201"/>
+  <path d="M13 2 3 14h9l-1 8 10-12h-9z" transform="translate(256 256) scale(10) translate(-12 -12)" fill="#8b93ff" stroke="#8b93ff" stroke-width="1.4" stroke-linejoin="round"/>
+</svg>

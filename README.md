@@ -84,3 +84,14 @@ Un lecteur YouTube **indépendant du chrono** : touche une playlist ou une vidé
 ## Rapidité
 
 Les données de Notion sont gardées 60 secondes ; passé ce délai, l'écran est servi **tout de suite** avec ce qu'on a et Notion est relu en arrière-plan (plus d'attente de 1 à 2 secondes à chaque visite).
+
+## Logo et icônes
+Le logo (un anneau de chrono qui se referme autour d'un éclair, 100 % flat : fond #0b0d16 et symbole #8b93ff, les couleurs de l'appli) est dessiné une seule fois dans `public/icons/icon.svg`.
+Les PNG (192, 512, « maskable » 512, apple-touch-icon 180, favicon) sont fabriqués à partir de lui sur ton ordinateur, jamais sur le NAS :
+
+```bash
+python3 outils/icones.py
+```
+Il utilise le navigateur sans écran de Playwright (ou `CHROMIUM=/chemin/vers/chrome`) ; rien n'est ajouté à l'appli ni à l'image Docker.
+Aperçu avant/après : `docs/logo-apercu.png`. Si tu changes le logo, change aussi `CACHE` dans `public/sw.js`.
+**iPhone** : iOS garde l'ancienne icône tant que l'appli n'est pas réinstallée : supprime BOSSE ! de l'écran d'accueil, puis Safari → Partager → « Sur l'écran d'accueil ».

@@ -331,7 +331,13 @@ test('l’appli installable : manifeste, service worker, page', async () => {
   assert.strictEqual(m.name, 'BOSSE !');
   assert.strictEqual(m.display, 'standalone');
   assert.strictEqual((await fetch(base + '/sw.js')).status, 200);
-  assert.strictEqual((await fetch(base + '/icons/icon-192.png')).status, 200);
+  // Toutes les icônes annoncées existent, avec une version « any » et une « maskable ».
+  assert.ok(m.icons.some((i) => i.purpose === 'any') && m.icons.some((i) => i.purpose === 'maskable'));
+  for (const i of m.icons) assert.strictEqual((await fetch(base + '/' + i.src)).status, 200, i.src);
+  assert.strictEqual((await fetch(base + '/icons/apple-touch-icon.png')).status, 200);
+  const page = await (await fetch(base + '/')).text();
+  assert.match(page, /rel="apple-touch-icon" href="icons\/apple-touch-icon\.png"/);
+  assert.match(page, /rel="icon" href="icons\/favicon\.svg"/);
   assert.match(await (await fetch(base + '/')).text(), /<title>BOSSE !<\/title>/);
 });
 

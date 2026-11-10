@@ -1,6 +1,10 @@
 // Réseau d'abord, copie en cache en secours : le dernier écran affiché reste lisible sans réseau.
 self.addEventListener('install', () => self.skipWaiting());
-self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+// Version du cache : à changer quand les icônes ou les fichiers de base changent (l'ancienne copie est alors supprimée).
+const CACHE = 'bosse-v3';
+self.addEventListener('activate', (e) => e.waitUntil(
+  caches.keys().then((noms) => Promise.all(noms.filter((n) => n !== CACHE).map((n) => caches.delete(n)))).then(() => self.clients.claim())
+));
 
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET' || !e.request.url.startsWith(self.location.origin)) return;
@@ -10,7 +14,7 @@ self.addEventListener('fetch', (e) => {
       .then((res) => {
         if (res.ok) {
           const copie = res.clone();
-          caches.open('bosse').then((c) => c.put(e.request, copie));
+          caches.open(CACHE).then((c) => c.put(e.request, copie));
         }
         return res;
       })
