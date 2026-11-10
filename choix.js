@@ -47,7 +47,7 @@ function candidats(projets, taches) {
   const sortie = [];
   const avecTache = new Set();
   taches.forEach((t, i) => {
-    if (t.statut === 'Fait') return;
+    if (t.statut === 'Fait' || t.statut === 'Bloquée') return; // terminée, ou bloquée : pas proposée comme action
     const projet = t.projetId ? actifs.get(t.projetId) : null;
     if (t.projetId && !projet) return;
     if (projet) avecTache.add(projet.id);

@@ -76,8 +76,9 @@ function champsProjet(corps, { creation = false } = {}) {
   return c;
 }
 
-// Tâche. « fait » (vrai / faux) devient le statut. Le projet est vérifié par le serveur (il doit exister).
-function champsTache(corps) {
+// Tâche. « fait » (vrai / faux) devient le statut « Fait » / « À faire » ; « statut » choisit un des statuts de la base
+// (statuts : la liste lue dans Notion, par ex. À faire, En cours, Fait, Bloquée). Le projet est vérifié par le serveur (il doit exister).
+function champsTache(corps, { statuts = ['À faire', 'Fait'] } = {}) {
   const c = {};
   if (present(corps, 'titre')) {
     c.titre = texte(corps.titre, 200, 'Titre');
@@ -91,6 +92,10 @@ function champsTache(corps) {
   if (present(corps, 'fait')) {
     if (typeof corps.fait !== 'boolean') refuser('« fait » : vrai ou faux.');
     c.statut = corps.fait ? 'Fait' : 'À faire';
+  }
+  if (present(corps, 'statut')) {
+    if (!statuts.includes(corps.statut)) refuser(`Statut inconnu (${statuts.join(', ')}).`);
+    c.statut = corps.statut;
   }
   return c;
 }

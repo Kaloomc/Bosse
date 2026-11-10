@@ -29,3 +29,9 @@ Titre · Lien YouTube (vidéo ou playlist) · Désactivé (case : écarte un lie
 ## Activités (étape 6)
 Propriété ajoutée à « Mes projets » le 8 novembre 2026 : **Type** (sélection : `Projet`, `Activité`). Les lignes existantes n'ont pas été modifiées (Type vide = Projet).
 Activités de départ : Lire (enveloppe 120 min / semaine, turquoise), Brainstormer avec Claude (violet) et Réviser (orange), sans enveloppe : à fixer dans l'appli (Projets → Fixer une enveloppe) ou dans Notion (« Objectif de temps hebdo (min) »).
+
+## À savoir : doublons dans la page « Projet » (constaté le 10 novembre 2026)
+La page contient **deux bases « Tâches » et deux « Sessions de travail »** :
+- celles du prototype Open Space (créées en octobre, **avec tes vraies tâches et séances**) : c'est elles que BOSSE ! utilise, car elles viennent en premier dans la page ;
+- celles créées par BOSSE ! le 7 novembre (colonnes `Tâche`, `Titre`…), qui ne contiennent que 14 tâches de départ et aucune séance.
+Rien n'a été supprimé ni déplacé. Les deux bases créées le 7 novembre sont donc inutilisées : tu peux les supprimer dans Notion (ou me demander de le faire, après avoir repris les tâches qui t'intéressent, par ex. la liste de Gorgée).

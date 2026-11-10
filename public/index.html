@@ -57,18 +57,6 @@
 
     <section id="chrono" class="ecran" hidden>
       <div id="chrono-contenu"></div>
-      <!-- La radio reste ici, hors de « chrono-contenu » (qui est redessiné) : déplacer le lecteur le relancerait. -->
-      <div id="musique" class="musique" hidden>
-        <div class="musique-barre">
-          <svg class="ico" aria-hidden="true"><use href="#i-music"/></svg>
-          <span class="musique-titre" id="musique-titre">Musique</span>
-          <button type="button" class="m-bouton" id="m-lecture" aria-label="Lecture ou pause"><svg class="ico" aria-hidden="true"><use href="#i-play"/></svg></button>
-          <button type="button" class="m-bouton" id="m-suivante" aria-label="Morceau suivant"><svg class="ico" aria-hidden="true"><use href="#i-skip"/></svg></button>
-          <button type="button" class="m-bouton" id="m-son" aria-label="Couper le son"><svg class="ico" aria-hidden="true"><use href="#i-volume"/></svg></button>
-        </div>
-        <p class="musique-note" id="musique-note" hidden></p>
-        <div class="musique-cadre"><div id="lecteur-yt"></div></div>
-      </div>
     </section>
 
     <section id="bilan" class="ecran" hidden>
@@ -151,9 +139,9 @@
     </section>
 
     <section id="bibliotheque" class="ecran" hidden>
-      <a class="retour" href="#reglages"><svg class="ico" aria-hidden="true"><use href="#i-chevron"/></svg>Réglages</a>
+      <a class="retour" href="#musique"><svg class="ico" aria-hidden="true"><use href="#i-chevron"/></svg>Musique</a>
       <div class="entete-ecran">
-        <h2 class="titre-ecran">Musique</h2>
+        <h2 class="titre-ecran">Bibliothèque</h2>
         <button class="btn-ajout" type="button" id="ajouter-lien"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>Ajouter un lien</button>
       </div>
       <div id="bibliotheque-contenu"></div>
@@ -163,13 +151,33 @@
       <h2 class="titre-ecran">Réglages</h2>
       <div id="reglages-contenu"></div>
     </section>
+
+    <!-- La radio : un seul lecteur pour tout (onglet Musique et écran du chrono). Il n'est jamais déplacé dans la page :
+         déplacer un lecteur YouTube le relancerait. L'écran décide seulement ce qu'on en voit (mode-chrono / mode-onglet). -->
+    <div id="musique" class="musique mode-onglet" hidden>
+      <div class="musique-entete">
+        <h2 class="titre-ecran">Musique</h2>
+        <p class="note gauche">Des mix et playlists YouTube, sans lancer de chrono. Touche-en un pour l’écouter, ou laisse la radio choisir.</p>
+      </div>
+      <div class="musique-barre">
+        <svg class="ico" aria-hidden="true"><use href="#i-music"/></svg>
+        <span class="musique-titre" id="musique-titre">Musique</span>
+        <button type="button" class="m-bouton" id="m-lecture" aria-label="Lecture ou pause"><svg class="ico" aria-hidden="true"><use href="#i-play"/></svg></button>
+        <button type="button" class="m-bouton" id="m-suivante" aria-label="Morceau suivant"><svg class="ico" aria-hidden="true"><use href="#i-skip"/></svg></button>
+        <button type="button" class="m-bouton" id="m-son" aria-label="Couper le son"><svg class="ico" aria-hidden="true"><use href="#i-volume"/></svg></button>
+      </div>
+      <p class="musique-note" id="musique-note" hidden></p>
+      <div class="musique-cadre"><div id="lecteur-yt"></div></div>
+      <div class="musique-liste" id="musique-liste"></div>
+    </div>
   </main>
 
   <nav id="nav" hidden aria-label="Navigation">
-    <a href="#maintenant"><svg class="ico" aria-hidden="true"><use href="#i-zap"/></svg><span>Maintenant</span></a>
+    <a href="#maintenant"><svg class="ico" aria-hidden="true"><use href="#i-zap"/></svg><span>Action</span></a>
     <a href="#projets"><svg class="ico" aria-hidden="true"><use href="#i-folder"/></svg><span>Projets</span></a>
     <a href="#taches"><svg class="ico" aria-hidden="true"><use href="#i-list"/></svg><span>Tâches</span></a>
     <a href="#roue"><svg class="ico" aria-hidden="true"><use href="#i-shuffle"/></svg><span>Roue</span></a>
+    <a href="#musique"><svg class="ico" aria-hidden="true"><use href="#i-music"/></svg><span>Musique</span></a>
     <a href="#reglages"><svg class="ico" aria-hidden="true"><use href="#i-sliders"/></svg><span>Réglages</span></a>
   </nav>
 

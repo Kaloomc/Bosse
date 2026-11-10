@@ -16,7 +16,7 @@ const Radio = (() => {
   let minuteurBlocage = null;
   let jouaitALEcran = false; // la musique jouait-elle quand l'écran était allumé ?
   let ecouteur = () => {};
-  const etat = { actif: false, joue: false, bloque: false, titre: '', erreur: null };
+  const etat = { actif: false, joue: false, bloque: false, titre: '', courantId: null, erreur: null };
   const prevenir = () => ecouteur({ ...etat, coupe });
 
   // Le script de YouTube n'est chargé qu'au premier besoin.
@@ -48,7 +48,8 @@ const Radio = (() => {
     return creation;
   }
 
-  async function bibliotheque() {
+  async function bibliotheque(frais = false) {
+    if (frais) biblio = null;
     if (!biblio) {
       const r = await api('/api/musique');
       biblio = r.entrees;
@@ -66,6 +67,7 @@ const Radio = (() => {
   function lire(entree) {
     courant = entree;
     etat.titre = entree.titre;
+    etat.courantId = entree.id;
     etat.bloque = false;
     if (entree.type === 'playlist') {
       joueur.loadPlaylist({ list: entree.playlistId, listType: 'playlist', index: 0 });
@@ -101,8 +103,9 @@ const Radio = (() => {
     suivante();
   }
 
-  async function demarrer() {
-    if (etat.actif) return;
+  // Sans argument : la radio tire un élément au hasard. Avec un élément de la bibliothèque : on le joue.
+  async function demarrer(entree) {
+    if (etat.actif && !entree) return;
     etat.actif = true;
     etat.erreur = null;
     prevenir();
@@ -111,7 +114,7 @@ const Radio = (() => {
       await bibliotheque();
       await creerJoueur();
       if (!etat.actif) return; // arrêtée entre-temps
-      lire(tirer());
+      lire(entree ?? tirer());
     } catch (e) {
       etat.erreur = e.message;
       etat.actif = false;
@@ -140,7 +143,7 @@ const Radio = (() => {
     clearTimeout(minuteurBlocage);
     if (!etat.actif && !etat.joue) return;
     try { joueur?.stopVideo(); } catch {}
-    Object.assign(etat, { actif: false, joue: false, bloque: false, erreur: null });
+    Object.assign(etat, { actif: false, joue: false, bloque: false, erreur: null, courantId: null, titre: '' });
     courant = null;
     prevenir();
   }
@@ -152,5 +155,8 @@ const Radio = (() => {
     setTimeout(() => { if (etat.actif && !etat.joue) reprendre(); }, 400);
   });
 
-  return { demarrer, suivante, pause, reprendre, basculerSon, arreter, surChangement: (f) => { ecouteur = f; }, get etat() { return { ...etat, coupe }; } };
+  // La bibliothèque (liens valides, non désactivés) ; frais : la relire (elle a pu changer).
+  const liste = (frais = true) => bibliotheque(frais);
+
+  return { demarrer, liste, suivante, pause, reprendre, basculerSon, arreter, surChangement: (f) => { ecouteur = f; }, get etat() { return { ...etat, coupe }; } };
 })();

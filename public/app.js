@@ -49,6 +49,7 @@ function echeance(iso) {
   if (jours <= 7) return { texte: `${date} · dans ${jours} j`, classe: 'proche' };
   return { texte: date, classe: '' };
 }
+const puceStatut = (statut) => (statut && !['À faire', 'Fait'].includes(statut) ? `<span class="puce" data-statut="${esc(statut)}">${esc(statut)}</span>` : '');
 const puceEcheance = (iso) => {
   if (!iso) return '';
   const e = echeance(iso);
@@ -144,6 +145,11 @@ function majMusique(e) {
   $('#m-lecture').innerHTML = ico(e.joue ? 'pause' : 'play');
   $('#m-son').innerHTML = ico(e.coupe ? 'mute' : 'volume');
   $('#m-son').setAttribute('aria-label', e.coupe ? 'Remettre le son' : 'Couper le son');
+  document.querySelectorAll('#musique-liste [data-jouer]').forEach((b) => {
+    const enCours = e.actif && b.dataset.jouer === e.courantId;
+    b.classList.toggle('joue', enCours);
+    b.setAttribute('aria-current', enCours ? 'true' : 'false');
+  });
   const note = $('#musique-note');
   note.textContent = e.erreur || (e.bloque ? 'Le navigateur bloque le démarrage automatique : touche ▶ pour lancer la musique.' : e.actif && !e.titre ? 'Chargement de la musique…' : '');
   note.hidden = !note.textContent;
@@ -303,6 +309,8 @@ async function chargerChrono() {
   garderEcranAllume();
   // La musique démarre avec le chrono (et reste en place si l'écran est redessiné).
   $('#musique').hidden = !musiqueActive();
+  $('#musique').classList.add('mode-chrono');
+  $('#musique').classList.remove('mode-onglet');
   if (musiqueActive()) {
     majMusique(Radio.etat);
     if (!Radio.etat.actif) Radio.demarrer();
@@ -588,9 +596,9 @@ async function chargerTaches() {
       <ul class="liste">${g.taches.map((t) => `
         <li class="ligne ${t.projetActif ? '' : 'en-sommeil'}">
           <button class="rond" type="button" data-fait="${esc(t.id)}" aria-label="Terminer : ${esc(t.titre)}">${ico('check')}</button>
-          <button class="ligne-texte ligne-btn" type="button" data-editer="${esc(t.id)}" aria-label="Modifier : ${esc(t.titre)}"><span class="ligne-titre">${esc(t.titre)}</span>
-            <span class="puces"><span class="puce">${duree(t.duree)}</span>${puceEcheance(t.echeance)}${t.priorite ? `<span class="puce prio-${esc(t.priorite)}">${esc(t.priorite)}</span>` : ''}${t.projetActif ? '' : '<span class="puce">projet en pause</span>'}${t.notes ? `<span class="puce">${ico('edit')}notes</span>` : ''}</span></button>
-          ${t.projetActif ? `<button class="lancer" type="button" data-lancer="${esc(t.id)}" aria-label="Lancer le chrono : ${esc(t.titre)}">${ico('play')}</button>` : ''}
+          <button class="ligne-texte ligne-btn" type="button" data-editer="${esc(t.id)}"><span class="ligne-titre">${esc(t.titre)}<span class="crayon" aria-hidden="true">${ico('edit')}</span></span>
+            <span class="puces"><span class="puce">${duree(t.duree)}</span>${puceStatut(t.statut)}${puceEcheance(t.echeance)}${t.priorite ? `<span class="puce prio-${esc(t.priorite)}">${esc(t.priorite)}</span>` : ''}${t.projetActif ? '' : '<span class="puce">projet en pause</span>'}${t.notes ? `<span class="puce">${ico('edit')}notes</span>` : ''}</span></button>
+          ${t.projetActif && t.statut !== 'Bloquée' ? `<button class="lancer" type="button" data-lancer="${esc(t.id)}" aria-label="Lancer le chrono : ${esc(t.titre)}">${ico('play')}</button>` : ''}
         </li>`).join('')}</ul>
     </section>`).join('') : '<div class="vide"><p>Aucune tâche à faire. Ajoute-en avec le bouton « Ajouter ».</p></div>';
   if (faitesVisibles) await chargerFaites();
@@ -603,7 +611,7 @@ async function chargerFaites() {
   $('#taches-faites').innerHTML = liste.length ? `<h3 class="sous-titre">Terminées récemment</h3><ul class="liste">${liste.map((t) => `
     <li class="ligne fait" style="--c:${esc(t.projet ? t.projet.hex : '#8b93ff')}">
       <button class="rond rempli" type="button" data-retablir="${esc(t.id)}" aria-label="Rétablir : ${esc(t.titre)}">${ico('check')}</button>
-      <button class="ligne-texte ligne-btn" type="button" data-editer="${esc(t.id)}" aria-label="Modifier : ${esc(t.titre)}"><span class="ligne-titre">${esc(t.titre)}</span>
+      <button class="ligne-texte ligne-btn" type="button" data-editer="${esc(t.id)}" aria-label="Modifier : ${esc(t.titre)}"><span class="ligne-titre">${esc(t.titre)}<span class="crayon" aria-hidden="true">${ico('edit')}</span></span>
         <span class="puces">${t.projet ? `<span class="puce">${esc(t.projet.nom)}</span>` : '<span class="puce">Hors projet</span>'}${t.tempsPasse ? `<span class="puce">${ico('timer')}${duree(t.tempsPasse)}</span>` : ''}</span></button>
     </li>`).join('')}</ul>` : '<div class="vide"><p>Aucune tâche terminée.</p></div>';
 }
@@ -630,23 +638,24 @@ $('#taches-faites').addEventListener('click', async (ev) => {
 // Modifier une tâche : titre, projet, durée, priorité, échéance, notes, terminée ou non.
 async function feuilleTache(t) {
   if (!t) return;
-  const projets = await api('/api/projets?tous=1');
+  const [projets, o] = await Promise.all([api('/api/projets?tous=1'), options()]);
   const choixProjets = projets.filter((p) => p.statut === 'En cours' || p.id === t.projetId);
-  const avant = { titre: t.titre, projetId: t.projetId || null, duree: t.duree, priorite: t.priorite || null, echeance: t.echeance || null, notes: t.notes || '', fait: t.statut === 'Fait' };
+  const statuts = [...new Set([...o.statutsTache, t.statut])];
+  const avant = { titre: t.titre, projetId: t.projetId || null, duree: t.duree, priorite: t.priorite || null, echeance: t.echeance || null, notes: t.notes || '', statut: t.statut };
   feuille({
     titre: 'Modifier la tâche',
-    valeurs: { ...t, projetId: t.projetId || '', priorite: t.priorite || '', fait: t.statut === 'Fait' },
+    valeurs: { ...t, projetId: t.projetId || '', priorite: t.priorite || '' },
     champs: [
       { nom: 'titre', label: 'Tâche', type: 'text', maxlength: 200, requis: true },
       { nom: 'projetId', label: 'Projet', type: 'select', options: [{ v: '', l: 'Hors projet (to-do simple)' }, ...choixProjets.map((p) => ({ v: p.id, l: p.nom }))] },
       { nom: 'duree', label: 'Durée estimée (min)', type: 'number', min: 5, max: 240, step: 5, requis: true },
       { nom: 'priorite', label: 'Priorité', type: 'select', options: choixListe(['Haute', 'Moyenne', 'Basse'], 'Aucune') },
       { nom: 'echeance', label: 'Échéance', type: 'date' },
-      { nom: 'notes', label: 'Notes', type: 'textarea' },
-      { nom: 'fait', label: 'Tâche terminée', type: 'checkbox' },
+      ...(o.capacites.notesTaches ? [{ nom: 'notes', label: 'Notes', type: 'textarea' }] : []),
+      { nom: 'statut', label: 'Statut', type: 'select', options: choixListe(statuts) },
     ],
     enregistrer: async (val) => {
-      const diff = changements(avant, { ...val, projetId: val.projetId || null, priorite: val.priorite || null, echeance: val.echeance || null });
+      const diff = changements(avant, { ...val, notes: val.notes ?? avant.notes, projetId: val.projetId || null, priorite: val.priorite || null, echeance: val.echeance || null });
       if (!Object.keys(diff).length) return;
       await api(`/api/taches/${encodeURIComponent(t.id)}`, { method: 'PATCH', body: diff });
       toast('Tâche modifiée');
@@ -839,6 +848,42 @@ $('#form-decoupe').addEventListener('submit', async (ev) => {
   bouton.disabled = false;
 });
 
+// --- Écran « Musique » (indépendant du chrono) -----------------------------------------------------------------------
+// Le lecteur de la radio est affiché seul, avec la bibliothèque : touche un élément pour le jouer. Le chrono peut aussi lancer la musique.
+async function chargerMusique() {
+  const bloc = $('#musique');
+  bloc.hidden = false;
+  bloc.classList.add('mode-onglet');
+  bloc.classList.remove('mode-chrono');
+  majMusique(Radio.etat);
+  const zone = $('#musique-liste');
+  try {
+    const entrees = await Radio.liste(true);
+    zone.innerHTML = `
+      <button class="btn-principal" type="button" id="musique-hasard">${ico('shuffle')}Une musique au hasard</button>
+      <h3 class="sous-titre">Bibliothèque</h3>
+      <ul class="liste">${entrees.map((e) => `
+        <li class="ligne" style="--c:var(--turquoise)">
+          <button class="ligne-texte ligne-btn" type="button" data-jouer="${esc(e.id)}"><span class="ligne-titre">${esc(e.titre)}</span>
+            <span class="puces"><span class="puce">${e.type === 'playlist' ? 'playlist' : 'vidéo'}</span><span class="puce joue-puce">${ico('play')}en cours</span></span></button>
+        </li>`).join('')}</ul>
+      <a class="lien-carte" href="#bibliotheque">Gérer la bibliothèque (ajouter, renommer, supprimer)${ico('chevron')}</a>
+      <details class="limites">
+        <summary>Limites de YouTube</summary>
+        <p>Le lecteur est celui de YouTube, intégré à l’appli. Sur iPhone, <b>le son s’arrête quand l’écran se verrouille</b> ou quand tu quittes l’appli (règle d’iOS et de YouTube) ; il repart tout seul à ton retour. La musique s’arrête aussi quand tu quittes cet onglet, car l’intégration YouTube demande que le lecteur reste visible. Safari peut exiger un appui sur ▶ pour démarrer.</p>
+      </details>`;
+    entrees.forEach((e) => { zone.querySelector(`[data-jouer="${CSS.escape(e.id)}"]`).entree = e; });
+    majMusique(Radio.etat);
+  } catch (err) {
+    zone.innerHTML = `<div class="vide erreur"><p>${esc(err.message)}</p></div><a class="lien-carte" href="#bibliotheque">Gérer la bibliothèque${ico('chevron')}</a>`;
+  }
+}
+$('#musique-liste').addEventListener('click', (ev) => {
+  if (ev.target.closest('#musique-hasard')) { preparerSon(); return void Radio.demarrer(); }
+  const b = ev.target.closest('[data-jouer]');
+  if (b?.entree) { preparerSon(); Radio.demarrer(b.entree); }
+});
+
 // --- Écran « Séances » (historique, séance oubliée, corrections) ------------------------------------------------------
 let seancesParId = new Map();
 const jourLong = (iso) => new Date(iso.slice(0, 10) + 'T12:00:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
@@ -980,10 +1025,12 @@ $('#ajouter-lien').addEventListener('click', () => feuilleLien(null));
 // --- Écran « Réglages » ---------------------------------------------------------------------------------------------
 async function chargerReglages() {
   const [e, s] = await Promise.all([api('/api/etat'), api('/api/synchro')]);
+  const doublons = Object.entries({ 'Tâches': s.bases?.doublons?.taches, 'Sessions de travail': s.bases?.doublons?.sessions, 'Musique': s.bases?.doublons?.musique }).filter(([, n]) => n > 0);
   $('#reglages-contenu').innerHTML = `
     <div class="carte">
       <h3>Données</h3>
       <p>${e.mode === 'notion' ? 'Reliée à Notion : projets, tâches et séances.' : 'Mode démo : données fictives, tout reste en mémoire et rien n’est lu ni écrit dans Notion.'}</p>
+      ${doublons.length ? `<p class="avertissement">Ta page Notion contient plusieurs bases du même nom (${doublons.map(([nom, n]) => `« ${esc(nom)} » : ${n + 1}`).join(', ')}). BOSSE ! utilise la première de chaque ; les autres sont ignorées. Supprime ou renomme les doublons dans Notion pour éviter toute confusion.</p>` : ''}
       ${s.attente ? `<p class="avertissement">${s.attente} séance${s.attente > 1 ? 's' : ''} en attente d’envoi vers Notion${s.erreur ? ` (${esc(s.erreur)})` : ''}. Nouvel essai toutes les 2 minutes.</p>` : ''}
       <button class="btn-lien" type="button" id="rafraichir"${e.mode === 'notion' ? '' : ' disabled'}>${ico('refresh')}Rafraîchir Notion</button>
       <p class="message" id="msg-rafraichir"></p>
@@ -1013,7 +1060,7 @@ async function chargerReglages() {
 }
 
 // --- Navigation ----------------------------------------------------------------------------------------------------------
-const ECRANS = { maintenant: chargerMaintenant, chrono: chargerChrono, bilan: chargerBilan, projets: chargerProjets, taches: chargerTaches, roue: chargerRoue, seances: chargerSeances, bibliotheque: chargerBibliotheque, reglages: chargerReglages };
+const ECRANS = { maintenant: chargerMaintenant, chrono: chargerChrono, bilan: chargerBilan, projets: chargerProjets, taches: chargerTaches, roue: chargerRoue, seances: chargerSeances, bibliotheque: chargerBibliotheque, musique: chargerMusique, reglages: chargerReglages };
 const SANS_NAV = ['connexion', 'chrono', 'bilan'];
 
 async function afficher() {
@@ -1021,9 +1068,10 @@ async function afficher() {
   const nom = location.hash.slice(1) || 'maintenant';
   const ecran = nom === 'connexion' || ECRANS[nom] ? nom : 'maintenant';
   document.querySelectorAll('.ecran').forEach((s) => { s.hidden = s.id !== ecran; });
-  if (ecran !== 'chrono') Radio.arreter();
+  if (!['chrono', 'musique'].includes(ecran)) Radio.arreter(); // la musique continue sur l'écran du chrono et sur l'onglet Musique
+  if (!['chrono', 'musique'].includes(ecran)) $('#musique').hidden = true;
   $('#nav').hidden = SANS_NAV.includes(ecran);
-  const onglet = { seances: 'reglages', bibliotheque: 'reglages' }[ecran] || ecran; // ces écrans se rangent sous « Réglages »
+  const onglet = { seances: 'reglages', bibliotheque: 'musique' }[ecran] || ecran; // ces écrans se rangent sous « Réglages »
   document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('actif', a.getAttribute('href') === '#' + onglet));
   if (ecran === 'connexion') return $('#mdp').focus();
   try {

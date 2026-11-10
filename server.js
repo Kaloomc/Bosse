@@ -57,7 +57,7 @@ const PRIORITES = ['Haute', 'Moyenne', 'Basse'];
 // --- Données : Notion (ou démo), gardées 60 secondes en mémoire -------------------------------
 // { projets, taches, sessions } : les séances de la semaine servent au retard hebdo et aux totaux.
 // Après chaque écriture, les données en mémoire sont mises à jour tout de suite (sans attendre une nouvelle lecture).
-const DUREE_CACHE = 60e3;
+const DUREE_CACHE = Number(process.env.DUREE_CACHE_MS ?? 60e3); // DUREE_CACHE_MS : pour les tests
 let cache = null; // { t, d }
 let enCours = null;
 let demoDonnees = null;
@@ -65,6 +65,12 @@ let demoDonnees = null;
 async function donnees({ force = false } = {}) {
   if (!notion.actif) return (demoDonnees ??= demo(aujourdhui())); // démo : tout reste en mémoire
   if (!force && cache && Date.now() - cache.t < DUREE_CACHE) return cache.d;
+  // Données un peu anciennes : on répond tout de suite avec ce qu'on a et on relit Notion en arrière-plan (l'écran n'attend plus
+  // 1 à 2 secondes à chaque visite après la première).
+  if (!force && cache) {
+    donnees({ force: true }).catch(() => {});
+    return cache.d;
+  }
   enCours ??= (async () => {
     try {
       const d = await notion.lireTout();
@@ -226,9 +232,10 @@ app.post('/api/taches/lot', async (req, res) => {
 // Seuls les champs envoyés changent. Une tâche terminée peut être modifiée ou rétablie.
 app.patch('/api/taches/:id', async (req, res) => {
   const d = await donnees();
-  const champs = edition.champsTache(req.body);
+  const champs = edition.champsTache(req.body, { statuts: (await infosBases()).statutsTache });
   verifier(Object.keys(champs).length, 'Rien à modifier.');
   verifier(!champs.projetId || d.projets.some((p) => p.id === champs.projetId), 'Projet inconnu.');
+  verifier(champs.notes === undefined || (await infosBases()).capacites.notesTaches, 'Ta base « Tâches » n’a pas de colonne « Notes » : les notes ne peuvent pas être enregistrées.');
   const tache = d.taches.find((t) => t.id === req.params.id);
   verifier(tache || notion.actif, 'Tâche introuvable : rafraîchis la liste.', 404); // en mode Notion, une tâche terminée n'est plus en mémoire
   const relue = notion.actif ? await notion.modifierTache(req.params.id, champs) : null;
@@ -267,6 +274,22 @@ app.get('/api/projets', async (req, res) => {
     .sort((a, b) => b.tachesOuvertes - a.tachesOuvertes || a.nom.localeCompare(b.nom, 'fr')));
 });
 
+// Ce que la base de tâches permet vraiment (statuts possibles, colonne de notes…), lu dans Notion ; valeurs de la démo sinon.
+const BASES_DEMO = { statutsTache: ['À faire', 'Fait'], capacites: { notesTaches: true, tempsParTache: true, bilanSeances: true }, doublons: { taches: 0, sessions: 0, musique: 0 } };
+let infosLues = null; // { t, infos }
+async function infosBases() {
+  if (!notion.actif) return BASES_DEMO;
+  if (!infosLues || Date.now() - infosLues.t > 10 * 60e3) {
+    try {
+      infosLues = { t: Date.now(), infos: await notion.infosBases() };
+    } catch (err) {
+      console.error('Notion (bases) :', err.message);
+      return infosLues?.infos ?? BASES_DEMO;
+    }
+  }
+  return infosLues.infos;
+}
+
 // Les listes déroulantes des formulaires : catégories (lues dans Notion), statuts, priorités, couleurs.
 const CATEGORIES_DEMO = ['École 42', 'Vidéo / vlog', 'Jeu / dev', 'Autre'];
 let optionsLues = null; // { t, categories }
@@ -278,7 +301,11 @@ app.get('/api/options', async (req, res) => {
       console.error('Notion (options) :', err.message);
     }
   }
-  res.json({ categories: optionsLues?.categories?.length ? optionsLues.categories : CATEGORIES_DEMO, statuts: edition.STATUTS, priorites: PRIORITES, couleurs: Object.keys(COULEURS), types: edition.TYPES });
+  const bases = await infosBases();
+  res.json({
+    categories: optionsLues?.categories?.length ? optionsLues.categories : CATEGORIES_DEMO, statuts: edition.STATUTS, priorites: PRIORITES, couleurs: Object.keys(COULEURS), types: edition.TYPES,
+    statutsTache: bases.statutsTache, capacites: bases.capacites,
+  });
 });
 
 // Les champs d'un projet tels qu'ils sont gardés en mémoire (la couleur donne la teinte, le logo est un lien).
@@ -516,7 +543,7 @@ app.post('/api/bilan', async (req, res) => {
 });
 
 // Séances en attente d'envoi vers Notion.
-app.get('/api/synchro', (req, res) => res.json(synchro.etat()));
+app.get('/api/synchro', async (req, res) => res.json({ ...synchro.etat(), bases: await infosBases() }));
 
 // --- Bibliothèque de musique (liens YouTube de la base Notion « Musique ») --------------------------------------
 // Les lignes sont gardées 5 minutes ; la radio ne reçoit que les liens valides et non désactivés (?tout=1 : tout, pour l'écran de gestion).

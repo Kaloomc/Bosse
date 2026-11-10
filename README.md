@@ -67,3 +67,20 @@ Onglet Tâches → **Découper** : une étape par ligne (puces et numéros accep
 - **Musique** (Réglages → Musique) : ajouter, renommer, désactiver (la case) ou supprimer des liens YouTube.
 - Les suppressions mettent la page à la **corbeille de Notion** (récupérable) et demandent une confirmation. Un champ qu'on ne touche pas n'est jamais réécrit.
 - Contrôles : [edition.js](edition.js) (formats, longueurs, listes de choix) ; chaque écriture vers Notion passe par une liste de champs autorisés (testée).
+
+## Tes bases existantes (Tâches, Sessions de travail) : l'appli s'adapte
+
+La page Notion « Projet » contenait déjà des bases **« Tâches »** et **« Sessions de travail »** (prototype Open Space) avec leurs propres colonnes : `Nom`, `Estimation (min)`, `Terminée le`, statuts `À faire / En cours / Fait / Bloquée` pour les tâches ; `Nom`, `Fin`, `Note`, `Source`, `Tâches faites` pour les séances. BOSSE ! ne leur impose donc pas ses noms de colonnes : il lit le **schéma réel** de chaque base et, pour chaque information, prend la première colonne qui existe parmi plusieurs noms possibles (voir `CHERCHE` dans [notion.js](notion.js)). Le titre est la colonne de type « titre », quel que soit son nom. Ce qui n'a pas de colonne (par ex. « Temps passé » ou « Notes » sur les tâches de l'ancienne base) n'est ni lu ni écrit, et l'écran ne le propose pas.
+
+- Une tâche terminée reçoit la date dans « Terminée le » (si la colonne existe) ; rétablie, elle est vidée. Une tâche « Bloquée » n'est jamais proposée comme action.
+- Une séance est écrite dans `Nom`, `Début` + `Fin`, `Durée (min)`, `Projet`, `Tâches faites`, `Note` et `Source` (Assis = chrono, Manuel = séance oubliée). L'historique existant (séances d'octobre) est lu et apparaît dans Réglages → Séances.
+- **Bases du même nom en double** : si la page contient plusieurs bases « Tâches » (ou « Sessions de travail », « Musique »), c'est la **première** qui est utilisée ; Réglages le signale. Pour en choisir une autre : `NOTION_BASE_TACHES`, `NOTION_BASE_SESSIONS`, `NOTION_BASE_MUSIQUE` dans le YAML.
+- **Cause du bug « tâches sans nom »** : les bases créées par BOSSE ! le 7 novembre portaient les mêmes titres que les anciennes ; la recherche par titre prenait les anciennes (les premières), dont le titre est dans `Nom` et non `Tâche`, d'où « Sans titre » partout (et des séances qui n'arrivaient pas à s'écrire : elles restaient « en attente » et partent maintenant, sans doublon).
+
+## Onglet Musique
+
+Un lecteur YouTube **indépendant du chrono** : touche une playlist ou une vidéo de la bibliothèque pour l'écouter, ou « Une musique au hasard » ; lecture/pause, suivante, coupe-son. Le chrono peut toujours lancer la musique, et le même lecteur continue (il n'est jamais déplacé dans la page : cela le relancerait). Limites de YouTube, dites dans l'écran : sur iPhone le son s'arrête quand l'écran se verrouille ou quand tu quittes l'appli (il repart au retour) ; la musique s'arrête aussi quand tu quittes l'onglet Musique et l'écran du chrono, car l'intégration YouTube demande que le lecteur reste visible ; Safari peut exiger un appui sur ▶. La bibliothèque se gère dans Musique → Gérer la bibliothèque.
+
+## Rapidité
+
+Les données de Notion sont gardées 60 secondes ; passé ce délai, l'écran est servi **tout de suite** avec ce qu'on a et Notion est relu en arrière-plan (plus d'attente de 1 à 2 secondes à chaque visite).

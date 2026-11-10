@@ -152,6 +152,8 @@ Pour changer le mot de passe ou un jeton : **Projet** → `bosse` → **Arrêter
 | `Notion : API token is invalid` | `NOTION_TOKEN` faux (comme pour Repax) |
 | Réglages : « N séances en attente d'envoi vers Notion (…) » | Lis l'erreur entre parenthèses ; corrige, puis **Rafraîchir Notion** : les séances partent |
 | Musique : « La base « Musique » n'est pas dans la même page… » | Idem avec `NOTION_BASE_MUSIQUE` |
+| Réglages : « plusieurs bases du même nom » | La page « Projet » contient des doublons (par ex. deux bases « Tâches ») : BOSSE ! utilise la première ; supprime ou renomme les autres dans Notion, ou fixe `NOTION_BASE_TACHES` / `NOTION_BASE_SESSIONS` |
+| Une tâche, une séance ou une information n'apparaît pas | La colonne correspondante n'existe pas dans ta base (voir « Tes bases existantes » dans le README) : l'écran ne la propose pas |
 | Musique : « Ces vidéos ne peuvent pas être lues ici » | Les liens de la base « Musique » sont cassés ou interdits à l'intégration : remplace-les |
 | Musique : rien ne démarre sur iPhone | Touche ▶ dans le lecteur (Safari exige un appui) |
 | Aucune action proposée | Aucun projet « En cours » ni tâche « À faire » : vérifie les statuts dans Notion |

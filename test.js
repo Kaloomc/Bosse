@@ -14,6 +14,7 @@ const stockage = require('./stockage');
 
 process.env.APP_PASSWORD = 'mot-de-passe-test';
 process.env.NOTION_ESPACE_MS = '0';
+process.env.DUREE_CACHE_MS = '60'; // mémoire des données de Notion : 60 ms en test (60 s en vrai)
 process.env.DOSSIER_DONNEES = fs.mkdtempSync(path.join(os.tmpdir(), 'bosse-test-')); // jamais le vrai dossier data/
 delete process.env.NOTION_TOKEN;
 const app = require('./server');
@@ -163,10 +164,22 @@ const sel = (n) => ({ type: 'select', select: n ? { name: n } : null });
 const date = (d) => ({ type: 'date', date: d ? { start: d } : null });
 const nb = (n) => ({ type: 'number', number: n });
 
+
+// Schémas de base (réponse de GET /databases/…) : celui créé par BOSSE !, et ceux des anciennes bases du prototype Open Space.
+const prop = (type, extra = {}) => ({ type, ...extra });
+const statutsOptions = (...noms) => ({ select: { options: noms.map((name) => ({ name })) } });
+const SCHEMA_TACHES = { properties: { 'Tâche': prop('title'), Projet: prop('relation'), Statut: prop('select', statutsOptions('À faire', 'Fait')), 'Priorité': prop('select'), 'Échéance': prop('date'), 'Durée estimée (min)': prop('number'), Notes: prop('rich_text'), 'Temps passé (min)': prop('number'), 'Dernière fois': prop('date') } };
+const SCHEMA_SESSIONS = { properties: { Titre: prop('title'), 'Début': prop('date'), 'Durée (min)': prop('number'), 'Tâche': prop('relation'), Projet: prop('relation'), Bilan: prop('rich_text'), 'Prochaine étape': prop('rich_text'), Origine: prop('select') } };
+const SCHEMA_MUSIQUE = { properties: { Titre: prop('title'), 'Lien YouTube': prop('url'), 'Désactivé': prop('checkbox') } };
+const ANCIEN_TACHES = { properties: { Nom: prop('title'), 'Estimation (min)': prop('number'), 'Priorité': prop('select'), Projet: prop('relation'), Statut: prop('select', statutsOptions('À faire', 'En cours', 'Fait', 'Bloquée')), 'Terminée le': prop('date'), 'Échéance': prop('date') } };
+const ANCIEN_SESSIONS = { properties: { Nom: prop('title'), 'Début': prop('date'), Fin: prop('date'), 'Durée (min)': prop('number'), Note: prop('rich_text'), 'Pause (min)': prop('number'), 'Pause depuis': prop('date'), Projet: prop('relation'), Source: prop('select'), 'Tâches faites': prop('relation') } };
+
 function fauxNotion() {
   const appels = [];
   const reponses = {
     [`GET /databases/${BASE_PROJETS}`]: { id: BASE_PROJETS, parent: { type: 'page_id', page_id: PAGE } },
+    [`GET /databases/${BASE_TACHES}`]: SCHEMA_TACHES,
+    [`GET /databases/${BASE_SESSIONS}`]: SCHEMA_SESSIONS,
     [`GET /blocks/${PAGE}/children?page_size=100`]: { results: [
       { type: 'child_database', id: BASE_SESSIONS, child_database: { title: 'Sessions de travail' } },
       { type: 'child_database', id: BASE_TACHES, child_database: { title: 'Tâches' } },
@@ -214,7 +227,7 @@ test('Notion : lecture des projets, des tâches et des séances, sans aucune éc
       id: 't1', titre: 'Inception', projetId: 'p1', statut: 'À faire', priorite: 'Haute', echeance: '2026-11-20', duree: 45, tempsPasse: 0, derniereFois: null, notes: 'à voir', url: 'https://notion/t1',
     });
     // Séances : celle sans date est ignorée ; la date garde l'heure.
-    assert.deepStrictEqual(sessions, [{ id: 's1', debut: '2026-11-06T18:00:00.000+01:00', duree: 30, tacheId: 't1', projetId: 'p1', titre: 'Inception · 30 min', bilan: 'ok', origine: null }]);
+    assert.deepStrictEqual(sessions, [{ id: 's1', debut: '2026-11-06T18:00:00.000+01:00', duree: 30, tacheId: 't1', projetId: 'p1', titre: 'Inception · 30 min', bilan: 'ok', origine: null, fin: null }]);
     // La base « Tâches » est retrouvée par son titre, dans la page qui contient « Mes projets ».
     assert.ok(faux.appels.some((a) => a.cle === `GET /blocks/${PAGE}/children?page_size=100`));
     // Tâches déjà faites exclues côté Notion.
@@ -415,13 +428,17 @@ test('objectif de la semaine atteint : −50 ; déjà une heure aujourd’hui : 
 // --- Notion : écritures (faux fetch), uniquement les champs prévus ------------------------------
 const BASE_MUSIQUE = '0e611578-86d3-411b-9cf5-61b2c28b7bd6';
 const IDS = { projets: BASE_PROJETS, taches: BASE_TACHES, sessions: BASE_SESSIONS, musique: BASE_MUSIQUE };
-function fauxApi(gerer) {
+function fauxApi(gerer, { schemas = {} } = {}) {
   const appels = [];
   const original = global.fetch;
+  const defauts = { [BASE_TACHES]: SCHEMA_TACHES, [BASE_SESSIONS]: SCHEMA_SESSIONS, [BASE_MUSIQUE]: SCHEMA_MUSIQUE, ...schemas };
   global.fetch = async (url, options = {}) => {
+    if (!String(url).startsWith('https://api.notion.com/')) return original(url, options); // le reste (nos propres requêtes vers le serveur de test) passe normalement
     const chemin = String(url).replace('https://api.notion.com/v1', '');
     const corps = options.body && JSON.parse(options.body);
     const cle = `${options.method || 'GET'} ${chemin}`;
+    const schema = !options.method || options.method === 'GET' ? defauts[chemin.replace('/databases/', '')] : null;
+    if (schema && chemin.startsWith('/databases/')) return { ok: true, status: 200, headers: { get: () => null }, json: async () => schema }; // lecture du schéma : pas comptée
     appels.push({ cle, body: corps });
     const r = gerer(cle, corps) ?? { status: 404, data: { message: `inattendu : ${cle}` } };
     const status = r.status ?? 200;
@@ -1414,4 +1431,230 @@ test('Notion : tâches terminées et historique des séances sont lus avec les b
       faux.restaurer();
     }
   });
+});
+
+// ==========================================================================================
+// Les bases existantes (prototype Open Space) : « Nom », « Estimation (min) », « Note », « Fin »…
+// Cause du bug des tâches « sans nom » : la page contenait déjà des bases « Tâches » et « Sessions de travail » avec d'autres colonnes.
+// ==========================================================================================
+const ANCIENNE_TACHES = 'b2d5902e-9fc9-430e-b2d5-902e9fc9430e';
+const ANCIENNE_SESSIONS = '1a87b757-4cb7-4152-a10b-a5735fb3a449';
+const MON_MUSIQUE = BASE_MUSIQUE;
+const SCHEMAS_ANCIENS = { [ANCIENNE_TACHES]: ANCIEN_TACHES, [ANCIENNE_SESSIONS]: ANCIEN_SESSIONS };
+
+// La page de l'utilisateur : ses anciennes bases d'abord, puis celles créées par BOSSE ! (mêmes titres), puis la musique.
+const PAGE_AVEC_DOUBLONS = { results: [
+  { type: 'child_database', id: BASE_PROJETS, child_database: { title: 'Mes projets' } },
+  { type: 'child_database', id: ANCIENNE_TACHES, child_database: { title: 'Tâches' } },
+  { type: 'child_database', id: ANCIENNE_SESSIONS, child_database: { title: 'Sessions de travail' } },
+  { type: 'child_database', id: BASE_TACHES, child_database: { title: 'Tâches' } },
+  { type: 'child_database', id: BASE_SESSIONS, child_database: { title: 'Sessions de travail' } },
+  { type: 'child_database', id: MON_MUSIQUE, child_database: { title: 'Musique' } },
+], next_cursor: null };
+
+async function avecAnciennesBases(gerer, fonction) {
+  process.env.NOTION_TOKEN = 'secret-test';
+  process.env.NOTION_BASE_PROJETS = BASE_PROJETS;
+  notion.oublier();
+  const faux = fauxApi((cle, corps) => {
+    if (cle === `GET /databases/${BASE_PROJETS}`) return { parent: { type: 'page_id', page_id: PAGE }, properties: { Type: {} } };
+    if (cle === `GET /blocks/${PAGE}/children?page_size=100`) return PAGE_AVEC_DOUBLONS;
+    return gerer(cle, corps);
+  }, { schemas: SCHEMAS_ANCIENS });
+  try {
+    await fonction(faux);
+  } finally {
+    faux.restaurer();
+    delete process.env.NOTION_TOKEN;
+    delete process.env.NOTION_BASE_PROJETS;
+    notion.oublier();
+  }
+}
+const ligneAncienne = (id, nom, extra = {}) => ({ id, url: `https://notion/${id}`, properties: { Nom: txt('title', nom), Projet: { type: 'relation', relation: [{ id: 'p1' }] }, Statut: sel('À faire'), ...extra } });
+
+test('anciennes bases : la PREMIÈRE base du titre est utilisée, les noms des tâches sont lus dans la colonne « Nom » (cause du bug)', async () => {
+  await avecAnciennesBases((cle) => {
+    if (cle === `POST /databases/${ANCIENNE_TACHES}/query`) return { results: [
+      ligneAncienne('a1', 'UI IN game'),
+      ligneAncienne('a2', 'Rajouter le loup garou', { 'Estimation (min)': nb(45), 'Priorité': sel('Haute'), Statut: sel('En cours') }),
+      ligneAncienne('a3', 'bloquée par un bug', { Statut: sel('Bloquée') }),
+    ], next_cursor: null };
+    if (cle === `POST /databases/${ANCIENNE_SESSIONS}/query`) return { results: [
+      { id: 's1', properties: { Nom: txt('title', 'Taotl — 15/10/2026'), 'Début': date('2026-11-05T09:00:00.000+01:00'), Fin: date('2026-11-05T09:45:00.000+01:00'), 'Durée (min)': nb(45), Source: sel('Assis'), Note: txt('rich_text', 'bien avancé'), Projet: { type: 'relation', relation: [{ id: 'p1' }] } } },
+      { id: 's2', properties: { Nom: txt('title', 'Gorgée'), 'Début': date('2026-11-04'), 'Durée (min)': nb(null), Source: sel('Manuel') } },
+    ], next_cursor: null };
+    if (cle === `POST /databases/${BASE_PROJETS}/query`) return { results: [], next_cursor: null };
+    return null;
+  }, async (faux) => {
+    const { taches, sessions } = await notion.lireTout();
+    assert.deepStrictEqual(taches.map((t) => [t.titre, t.statut, t.duree, t.priorite]), [
+      ['UI IN game', 'À faire', null, null], ['Rajouter le loup garou', 'En cours', 45, 'Haute'], ['bloquée par un bug', 'Bloquée', null, null], // plus aucun « Sans titre »
+    ]);
+    assert.ok(taches.every((t) => t.titre !== 'Sans titre' && t.projetId === 'p1'));
+    assert.deepStrictEqual(sessions[0], { id: 's1', debut: '2026-11-05T09:00:00.000+01:00', fin: '2026-11-05T09:45:00.000+01:00', duree: 45, tacheId: null, projetId: 'p1', titre: 'Taotl — 15/10/2026', bilan: 'bien avancé', origine: 'Chrono' }); // « Assis » = séance au chrono
+    assert.strictEqual(sessions[1].origine, 'Ajout manuel');
+    // Les bases utilisées sont les anciennes (les premières) ; les doublons créés par BOSSE ! sont signalés et ignorés.
+    assert.ok(faux.appels.some((a) => a.cle === `POST /databases/${ANCIENNE_TACHES}/query`));
+    assert.ok(!faux.appels.some((a) => a.cle.includes(BASE_TACHES)));
+    const infos = await notion.infosBases();
+    assert.deepStrictEqual(infos.doublons, { taches: 1, sessions: 1, musique: 0 });
+    assert.deepStrictEqual(infos.statutsTache, ['À faire', 'En cours', 'Fait', 'Bloquée']);
+    assert.deepStrictEqual(infos.capacites, { notesTaches: false, tempsParTache: false, bilanSeances: true }); // pas de colonne « Notes » ni « Temps passé »
+    // Le filtre « pas encore faite » porte sur la vraie colonne « Statut ».
+    assert.deepStrictEqual(faux.appels.find((a) => a.cle === `POST /databases/${ANCIENNE_TACHES}/query`).body.filter, { property: 'Statut', select: { does_not_equal: 'Fait' } });
+  });
+});
+
+test('anciennes bases : créer et modifier une tâche n’écrit que des colonnes qui existent (Nom, Estimation, Terminée le)', async () => {
+  await avecAnciennesBases((cle, corps) => {
+    if (cle === 'POST /pages') return ligneAncienne('nouvelle', corps.properties.Nom.title[0].text.content);
+    if (cle.startsWith('PATCH /pages/')) return ligneAncienne('a1', 'Renommée', { 'Estimation (min)': nb(60), Statut: sel('Fait') });
+    return null;
+  }, async (faux) => {
+    const t = await notion.creerTache({ titre: 'Appeler la banque', projetId: 'p1', duree: 20, priorite: 'Moyenne', echeance: '2026-11-12' });
+    assert.strictEqual(t.titre, 'Appeler la banque');
+    const creation = faux.appels.find((a) => a.cle === 'POST /pages');
+    assert.strictEqual(creation.body.parent.database_id, ANCIENNE_TACHES); // dans la vraie base de tâches
+    assert.deepStrictEqual(cles(creation.body.properties), ['Estimation (min)', 'Nom', 'Priorité', 'Projet', 'Statut', 'Échéance'].sort());
+    assert.strictEqual(creation.body.properties['Estimation (min)'].number, 20);
+
+    await notion.modifierTache('a1', { titre: 'Renommée', duree: 60, notes: 'pas de colonne pour ça', statut: 'Fait', priorite: null });
+    const patch = faux.appels.at(-1).body.properties;
+    assert.deepStrictEqual(cles(patch), ['Estimation (min)', 'Nom', 'Priorité', 'Statut', 'Terminée le'].sort()); // « notes » ignorées : pas de colonne
+    assert.deepStrictEqual(patch['Terminée le'], { date: { start: aujourdhui() } });
+    assert.strictEqual(patch.Nom.title[0].text.content, 'Renommée');
+
+    await notion.modifierTache('a1', { statut: 'À faire' }); // rétablie : « Terminée le » est vidée
+    assert.deepStrictEqual(faux.appels.at(-1).body.properties['Terminée le'], { date: null });
+    await notion.modifierTache('a1', { statut: 'Bloquée' });
+    assert.deepStrictEqual(cles(faux.appels.at(-1).body.properties), ['Statut', 'Terminée le']);
+  });
+});
+
+test('anciennes bases : une séance est écrite dans « Nom », « Début » + « Fin », « Note », « Source », « Tâches faites »', async () => {
+  await avecAnciennesBases((cle) => (cle === 'POST /pages' ? { id: 'sess' } : cle.startsWith('PATCH') || cle.startsWith('GET /pages/') ? { properties: {} } : null), async (faux) => {
+    await notion.creerSession({ ...SEANCE, origine: 'Chrono' });
+    await notion.creerSession({ ...SEANCE, id: 'x', origine: 'Ajout manuel', fin: null });
+    const [a, b] = faux.appels.filter((x) => x.cle === 'POST /pages');
+    assert.strictEqual(a.body.parent.database_id, ANCIENNE_SESSIONS);
+    assert.deepStrictEqual(cles(a.body.properties), ['Début', 'Durée (min)', 'Fin', 'Nom', 'Note', 'Projet', 'Source', 'Tâches faites'].sort()); // pas « Titre », « Bilan », « Origine », « Prochaine étape »
+    assert.deepStrictEqual(a.body.properties['Début'], { date: { start: '2026-11-07T10:00:00+01:00' } }); // la fin est dans sa propre colonne
+    assert.deepStrictEqual(a.body.properties.Fin, { date: { start: '2026-11-07T10:30:00+01:00' } });
+    assert.strictEqual(a.body.properties.Source.select.name, 'Assis');
+    assert.strictEqual(b.body.properties.Source.select.name, 'Manuel');
+    assert.strictEqual(a.body.properties.Note.rich_text[0].text.content, 'Fait la moitié');
+    assert.deepStrictEqual(a.body.properties['Tâches faites'], { relation: [{ id: 't1' }] });
+    assert.ok(!('Fin' in b.body.properties)); // pas de fin (séance oubliée)
+
+    // corriger une séance : le jour change, la fin suit ; la note est « Note »
+    await notion.modifierSeance('s1', { titre: 'X · 40 min', duree: 40, bilan: 'corrigé', debut: '2026-11-05T10:00:00+01:00', fin: '2026-11-05T10:40:00+01:00' });
+    const patch = faux.appels.at(-1).body.properties;
+    assert.deepStrictEqual(cles(patch), ['Début', 'Durée (min)', 'Fin', 'Nom', 'Note'].sort());
+  });
+});
+
+test('anciennes bases : sans colonne de temps par tâche, seule la fin de tâche est écrite ; le temps du projet reste ajusté', async () => {
+  await avecAnciennesBases((cle) => (cle === 'GET /pages/p1' ? { properties: { 'Temps cumulé (min)': nb(100), 'Dernière activité': date('2026-11-01') } } : cle.startsWith('PATCH') ? {} : null), async (faux) => {
+    await notion.infosBases(); // la recherche des bases et la lecture des schémas se font ici, une fois
+    const avant = faux.appels.length;
+    await notion.majTache('t1', { duree: 30, jour: '2026-11-07', fait: false });
+    assert.strictEqual(faux.appels.length, avant); // rien à écrire dans la tâche : aucune requête
+    await notion.majTache('t1', { duree: 30, jour: '2026-11-07', fait: true });
+    assert.deepStrictEqual(faux.appels.at(-1), { cle: 'PATCH /pages/t1', body: { properties: { Statut: { select: { name: 'Fait' } }, 'Terminée le': { date: { start: '2026-11-07' } } } } });
+    await notion.ajusterTemps({ projetId: 'p1', tacheId: 't1', delta: -20 });
+    const patchs = faux.appels.filter((a) => a.cle.startsWith('PATCH'));
+    assert.deepStrictEqual(patchs.map((p) => p.cle), ['PATCH /pages/t1', 'PATCH /pages/p1']); // la tâche n'a pas de « Temps passé » : seul le projet est ajusté
+    assert.deepStrictEqual(patchs.at(-1).body, { properties: { 'Temps cumulé (min)': { number: 80 } } });
+  });
+});
+
+test('une base choisie à la main (NOTION_BASE_TACHES) l’emporte, et un schéma illisible retombe sur les noms par défaut', async () => {
+  process.env.NOTION_TOKEN = 'secret-test';
+  process.env.NOTION_BASE_PROJETS = BASE_PROJETS;
+  process.env.NOTION_BASE_TACHES = BASE_TACHES;
+  process.env.NOTION_BASE_SESSIONS = BASE_SESSIONS;
+  process.env.NOTION_BASE_MUSIQUE = BASE_MUSIQUE;
+  notion.oublier();
+  const faux = fauxApi((cle) => (cle === `POST /databases/${BASE_TACHES}/query` ? { results: [{ id: 'x', properties: { 'Tâche': txt('title', 'Nommée'), Statut: sel('À faire') } }], next_cursor: null } : cle.startsWith('POST /databases/') ? { results: [], next_cursor: null } : null), { schemas: { [BASE_TACHES]: undefined } });
+  const original = global.fetch;
+  global.fetch = async (url, options) => (String(url).endsWith(`/databases/${BASE_TACHES}`) && !options?.method ? { ok: false, status: 400, headers: { get: () => null }, json: async () => ({ message: 'schéma illisible' }) } : original(url, options));
+  try {
+    const { taches } = await notion.lireTout();
+    assert.deepStrictEqual(taches.map((t) => t.titre), ['Nommée']); // noms par défaut : la structure de BOSSE !
+    assert.ok(!faux.appels.some((a) => a.cle.startsWith('GET /blocks/'))); // pas de recherche dans la page : les identifiants sont donnés
+  } finally {
+    global.fetch = original;
+    faux.restaurer();
+    for (const v of ['NOTION_TOKEN', 'NOTION_BASE_PROJETS', 'NOTION_BASE_TACHES', 'NOTION_BASE_SESSIONS', 'NOTION_BASE_MUSIQUE']) delete process.env[v];
+    notion.oublier();
+  }
+});
+
+test('API : statuts de tâche de la base (En cours, Bloquée…), tâche bloquée jamais proposée', async () => {
+  const options = (await json('/api/options')).corps;
+  assert.deepStrictEqual(options.statutsTache, ['À faire', 'Fait']); // démo : statuts de base
+  assert.strictEqual(options.capacites.notesTaches, true);
+  assert.strictEqual((await json('/api/synchro')).corps.bases.doublons.taches, 0);
+  assert.strictEqual((await json('/api/taches/t7', { method: 'PATCH', body: { statut: 'Bloquée' } })).status, 400); // pas un statut de la base démo
+  // choix : une tâche bloquée n'est pas candidate
+  const cl = choisir([projet('A')], [tache('ok', 'A'), tache('bloquee', 'A', { statut: 'Bloquée' }), tache('encours', 'A', { statut: 'En cours' })]);
+  assert.deepStrictEqual(cl.map((c) => c.id).sort(), ['encours', 'ok']);
+  // édition : statut validé par la liste de la base
+  assert.deepStrictEqual(edition.champsTache({ statut: 'Bloquée' }, { statuts: ['À faire', 'En cours', 'Fait', 'Bloquée'] }), { statut: 'Bloquée' });
+  assert.throws(() => edition.champsTache({ statut: 'Bloquée' }), /Statut inconnu/);
+});
+
+test('lectures Notion : une donnée un peu ancienne est servie tout de suite et relue en arrière-plan', async () => {
+  process.env.NOTION_TOKEN = 'secret-test';
+  process.env.NOTION_BASE_PROJETS = BASE_PROJETS;
+  process.env.NOTION_BASE_TACHES = BASE_TACHES;
+  process.env.NOTION_BASE_SESSIONS = BASE_SESSIONS;
+  process.env.NOTION_BASE_MUSIQUE = BASE_MUSIQUE;
+  notion.oublier();
+  let lectures = 0;
+  const faux = fauxApi((cle) => {
+    if (cle === `POST /databases/${BASE_TACHES}/query`) return { results: [{ id: 'x', url: 'u', properties: { 'Tâche': txt('title', `version ${++lectures}`), Statut: sel('À faire') } }], next_cursor: null };
+    if (cle.startsWith('POST /databases/')) return { results: [], next_cursor: null };
+    return null;
+  });
+  const titres = async () => { const r = await json('/api/taches'); assert.strictEqual(r.status, 200, JSON.stringify(r.corps)); return r.corps.map((t) => t.titre); };
+  const attendre = (ms) => new Promise((r) => setTimeout(r, ms));
+  try {
+    assert.deepStrictEqual(await titres(), ['version 1']); // première visite : on attend Notion
+    assert.deepStrictEqual(await titres(), ['version 1']); // encore frais : aucune nouvelle lecture
+    assert.strictEqual(lectures, 1);
+    await attendre(120); // les données sont maintenant « anciennes »
+    assert.deepStrictEqual(await titres(), ['version 1']); // réponse immédiate avec ce qu'on avait…
+    await attendre(150); // …pendant que Notion est relu en arrière-plan
+    assert.strictEqual(lectures, 2);
+    assert.deepStrictEqual(await titres(), ['version 2']); // la visite suivante voit la nouveauté
+  } finally {
+    faux.restaurer();
+    for (const v of ['NOTION_TOKEN', 'NOTION_BASE_PROJETS', 'NOTION_BASE_TACHES', 'NOTION_BASE_SESSIONS', 'NOTION_BASE_MUSIQUE']) delete process.env[v];
+    notion.oublier();
+    await attendre(200); // laisse finir une éventuelle relecture en cours avant les tests suivants
+  }
+});
+
+test('onglet Musique : un seul lecteur, hors de l’écran du chrono, avec sa liste et un onglet dans la barre', async () => {
+  const html = await (await fetch(base + '/')).text();
+  const finChrono = html.indexOf('</section>', html.indexOf('<section id="chrono"'));
+  const lecteur = html.indexOf('id="musique"');
+  assert.ok(lecteur > finChrono, 'le lecteur ne doit pas être dans la section « chrono » (le redessiner relancerait la musique)');
+  assert.strictEqual((html.match(/id="lecteur-yt"/g) || []).length, 1); // un seul lecteur pour l'onglet et pour le chrono
+  for (const id of ['musique-liste', 'm-lecture', 'm-suivante', 'm-son']) assert.match(html, new RegExp(`id="${id}"`));
+  assert.match(html, /<nav[\s\S]*href="#musique"[\s\S]*<\/nav>/);
+  const radio = await (await fetch(base + '/radio.js')).text();
+  assert.match(radio, /async function demarrer\(entree\)/); // on peut lancer un élément précis, sans chrono
+  assert.match(radio, /const liste = /);
+  const app = await (await fetch(base + '/app.js')).text();
+  assert.match(app, /\['chrono', 'musique'\]\.includes\(ecran\)/); // la musique ne s'arrête que si on quitte le chrono ET l'onglet Musique
+});
+
+test('tâches : le nom ne vient jamais d’un nom de colonne en dur, et le crayon de modification est affiché', async () => {
+  const app = await (await fetch(base + '/app.js')).text();
+  assert.match(app, /class="crayon"/);
+  const notionSrc = require('fs').readFileSync(path.join(__dirname, 'notion.js'), 'utf8');
+  assert.doesNotMatch(notionSrc, /texte\(p\['T[âa]che'\]\)/); // l'ancienne lecture qui donnait « Sans titre » sur l'ancienne base
+  assert.match(notionSrc, /titreDe = /);
 });
